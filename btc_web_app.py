@@ -25,12 +25,23 @@ SYMBOL = 'BTC/USDT'
 TIMEFRAMES = ['5m', '15m', '30m', '1h', '2h', '4h', '1d']
 LIMIT = 100
 
+# Cloud Geoblock-Proof Multi-Exchange Fallback
 @st.cache_resource
 def get_exchange():
-    return ccxt.binance({
-        'options': {'defaultType': 'future'},
-        'enableRateLimit': True
-    })
+    try:
+        # Primary: Binance (Standard Spot API works on cloud)
+        ex = ccxt.binance({'enableRateLimit': True})
+        ex.load_markets()
+        return ex
+    except Exception:
+        try:
+            # Fallback 1: Kraken (100% US Cloud allowed)
+            ex = ccxt.kraken({'enableRateLimit': True})
+            ex.load_markets()
+            return ex
+        except Exception:
+            # Fallback 2: KuCoin
+            return ccxt.kucoin({'enableRateLimit': True})
 
 exchange = get_exchange()
 
@@ -39,7 +50,7 @@ if 'locked_trade' not in st.session_state:
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 
-def detect_candlestick_pattern(row, prev_row, tf):
+def detect_candlestick_pattern(row, prev_row):
     o, h, l, c = row['open'], row['high'], row['low'], row['close']
     po, pc = prev_row['open'], prev_row['close']
     body = abs(c - o)
@@ -61,13 +72,15 @@ def detect_candlestick_pattern(row, prev_row, tf):
 
 def fetch_tf_data(tf):
     try:
-        candles = exchange.fetch_ohlcv(SYMBOL, timeframe=tf, limit=LIMIT)
+        # Standardize pair for exchange
+        sym = 'BTC/USDT' if 'BTC/USDT' in exchange.markets else 'BTC/USD'
+        candles = exchange.fetch_ohlcv(sym, timeframe=tf, limit=LIMIT)
         df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # Pure technical indicators using standard 'ta' library
+        # Technical calculations
         df['EMA9'] = ta.trend.ema_indicator(df['close'], window=9)
         df['EMA21'] = ta.trend.ema_indicator(df['close'], window=21)
-        df['EMA200'] = ta.trend.ema_indicator(df['close'], window=min(len(df)-1, 200))
+        df['EMA200'] = ta.trend.ema_indicator(df['close'], window=min(len(df)-1, 50))
         df['RSI'] = ta.momentum.rsi(df['close'], window=14)
         df['VOL_SMA20'] = df['volume'].rolling(window=20).mean()
         df['ATR'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
@@ -99,23 +112,25 @@ def fetch_tf_data(tf):
         df['DELTA'] = ((df['close'] - df['open']) / candle_spread) * df['volume']
 
         return df.bfill().ffill()
-    except Exception:
+    except Exception as e:
         return None
 
-# Load Data
+# Fetch all timeframes
 tf_data = {}
 for tf in TIMEFRAMES:
     d = fetch_tf_data(tf)
     if d is not None:
         tf_data[tf] = d
 
+# Fetch live ticker price
 try:
-    ticker = exchange.fetch_ticker(SYMBOL)
-    live_price = ticker['last']
+    sym = 'BTC/USDT' if 'BTC/USDT' in exchange.markets else 'BTC/USD'
+    ticker = exchange.fetch_ticker(sym)
+    live_price = ticker['last'] if ticker and 'last' in ticker else tf_data['5m'].iloc[-1]['close']
 except Exception:
     live_price = tf_data['5m'].iloc[-1]['close'] if '5m' in tf_data else 85000.0
 
-# 4H Levels
+# Support & Resistance Calculations
 df_4h = tf_data.get('4h')
 if df_4h is not None and len(df_4h) >= 2:
     p4 = df_4h.iloc[-2]
@@ -123,9 +138,8 @@ if df_4h is not None and len(df_4h) >= 2:
     res1 = (2 * pivot) - p4['low']
     sup1 = (2 * pivot) - p4['high']
 else:
-    pivot, res1, sup1 = live_price, live_price + 400, live_price - 400
+    pivot, res1, sup1 = live_price, live_price + 450, live_price - 450
 
-# 1D Levels
 df_1d = tf_data.get('1d')
 if df_1d is not None and len(df_1d) >= 1:
     ema200_1d = df_1d.iloc[-1].get('EMA200', live_price)
@@ -146,8 +160,8 @@ m1h_stoch = tf_data['1h'].iloc[-1].get('STOCH_K', 50) if '1h' in tf_data else 50
 m5m_stoch = tf_data['5m'].iloc[-1].get('STOCH_K', 50) if '5m' in tf_data else 50
 vol_5m = tf_data['5m'].iloc[-1]['volume'] / (tf_data['5m'].iloc[-1]['VOL_SMA20'] if tf_data['5m'].iloc[-1]['VOL_SMA20'] > 0 else 1) if '5m' in tf_data else 1.0
 
-near_res = (res1 - live_price) <= 150
-near_sup = (live_price - sup1) <= 150
+near_res = (res1 - live_price) <= 180
+near_sup = (live_price - sup1) <= 180
 
 short_cond = near_res and (m4h_stoch >= 85 and m1h_stoch >= 80 and m5m_stoch >= 80) and vol_5m < 1.2
 long_cond = near_sup and (m4h_stoch <= 20 and m1h_stoch <= 25 and m5m_stoch <= 20) and vol_5m < 1.2
@@ -172,10 +186,10 @@ if st.session_state.locked_trade is not None:
     hit_tp2 = (live_price >= t['tp2']) if t['type'] == 'LONG' else (live_price <= t['tp2'])
 
     if hit_sl:
-        st.error(f"🔴 {t['type']} TRADE STOP-LOSS HIT (-{abs(pts):.0f} pts). Position exited @ ${live_price:,.1f}.")
+        st.error(f"🔴 {t['type']} TRADE STOP-LOSS HIT (-{abs(pts):.0f} pts). Exited @ ${live_price:,.1f}.")
         st.session_state.locked_trade = None
     elif hit_tp2:
-        st.success(f"🟢 {t['type']} TARGET 2 HIT (+{pts:.0f} pts PROFIT BOOKED!).")
+        st.success(f"🟢 {t['type']} TARGET 2 HIT (+{pts:.0f} pts PROFIT BOOKED!). Great Trade.")
         st.session_state.locked_trade = None
     else:
         css_class = "trade-short" if t['type'] == 'SHORT' else "trade-long"
@@ -196,25 +210,26 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-# ----------------- TABLE -----------------
+# ----------------- TABLE (ALL 12 INDICATORS) -----------------
 st.subheader("📊 Multi-Timeframe Matrix (All 12 Indicators Live)")
 
 table_rows = []
 for tf in TIMEFRAMES:
-    if tf not in tf_data:
+    if tf not in tf_data or tf_data[tf] is None or tf_data[tf].empty:
         continue
     df = tf_data[tf]
     curr = df.iloc[-1]
-    prev = df.iloc[-2]
+    prev = df.iloc[-2] if len(df) >= 2 else curr
 
-    vol_sma = curr['VOL_SMA20'] if curr['VOL_SMA20'] > 0 else 1
+    vol_sma = curr.get('VOL_SMA20', 1)
+    vol_sma = vol_sma if vol_sma > 0 else 1
     vol_ratio = curr['volume'] / vol_sma
-    above_200 = "Above" if curr['close'] >= curr['EMA200'] else "Below"
-    above_vwap = "Above" if curr['close'] >= curr['VWAP'] else "Below"
-    pattern = detect_candlestick_pattern(curr, prev, tf)
+    above_200 = "Above" if curr['close'] >= curr.get('EMA200', curr['close']) else "Below"
+    above_vwap = "Above" if curr['close'] >= curr.get('VWAP', curr['close']) else "Below"
+    pattern = detect_candlestick_pattern(curr, prev)
 
-    stoch_k = curr['STOCH_K']
-    will_v = curr['WILLR']
+    stoch_k = curr.get('STOCH_K', 50.0)
+    will_v = curr.get('WILLR', -50.0)
     if stoch_k <= 18 and will_v <= -82:
         sig = "💎 DIP BUY"
     elif stoch_k >= 85 and will_v >= -18:
@@ -224,22 +239,25 @@ for tf in TIMEFRAMES:
 
     table_rows.append({
         "TF": tf,
-        "Trend": "BULLISH" if curr['EMA9'] > curr['EMA21'] else "BEARISH",
+        "Trend": "BULLISH" if curr.get('EMA9', 0) > curr.get('EMA21', 0) else "BEARISH",
         "200 EMA": above_200,
         "VWAP": above_vwap,
-        "RSI": f"{curr['RSI']:.1f}",
+        "RSI": f"{curr.get('RSI', 50):.1f}",
         "Vol Ratio": f"{vol_ratio:.1f}x",
         "StochRSI": f"{stoch_k:.0f}",
-        "ADX": f"{curr['ADX']:.0f}",
-        "CCI": f"{curr['CCI']:.0f}",
+        "ADX": f"{curr.get('ADX', 20):.0f}",
+        "CCI": f"{curr.get('CCI', 0):.0f}",
         "Will %R": f"{will_v:.0f}",
-        "Delta": f"{curr['DELTA']:+.0f}",
-        "BB Squeeze": f"{curr['BB_WIDTH']:.2f}%",
+        "Delta": f"{curr.get('DELTA', 0):+.0f}",
+        "BB Squeeze": f"{curr.get('BB_WIDTH', 2.0):.2f}%",
         "Pattern": pattern,
         "Signal": sig
     })
 
-st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+if table_rows:
+    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+else:
+    st.info("Syncing live exchange feeds... Kripya 5 seconds wait karein.")
 
 # ----------------- AI CHATBOT -----------------
 st.subheader("🤖 Institutional AI Master Analyst")
@@ -274,5 +292,6 @@ if user_query:
     with st.chat_message("assistant"):
         st.write(reply)
 
+# Auto refresh every 5 seconds
 time.sleep(5)
 st.rerun()

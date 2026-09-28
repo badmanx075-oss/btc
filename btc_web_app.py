@@ -1,10 +1,10 @@
 import streamlit as st
 import ccxt
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
+import ta
 import time
 
-# Page Configuration for Mobile & Desktop
 st.set_page_config(
     page_title="BTC Institutional Terminal",
     page_icon="⚡",
@@ -12,41 +12,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom Dark Trading CSS
 st.markdown("""
 <style>
-    .stApp {
-        background-color: #09090b;
-        color: #f4f4f5;
-    }
-    .metric-card {
-        background-color: #18181b;
-        border: 1px solid #27272a;
-        border-radius: 10px;
-        padding: 15px;
-        margin-bottom: 10px;
-    }
-    .trade-short {
-        background-color: #7f1d1d;
-        border-left: 6px solid #ef4444;
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 12px;
-    }
-    .trade-long {
-        background-color: #14532d;
-        border-left: 6px solid #22c55e;
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 12px;
-    }
-    .trade-wait {
-        background-color: #27272a;
-        border-left: 6px solid #eab308;
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 12px;
-    }
+    .stApp { background-color: #09090b; color: #f4f4f5; }
+    .trade-short { background-color: #7f1d1d; border-left: 6px solid #ef4444; padding: 15px; border-radius: 8px; margin-bottom: 12px; }
+    .trade-long { background-color: #14532d; border-left: 6px solid #22c55e; padding: 15px; border-radius: 8px; margin-bottom: 12px; }
+    .trade-wait { background-color: #27272a; border-left: 6px solid #eab308; padding: 15px; border-radius: 8px; margin-bottom: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -63,7 +34,6 @@ def get_exchange():
 
 exchange = get_exchange()
 
-# Persistent state across auto-refreshes
 if 'locked_trade' not in st.session_state:
     st.session_state.locked_trade = None
 if 'chat_history' not in st.session_state:
@@ -94,43 +64,45 @@ def fetch_tf_data(tf):
         candles = exchange.fetch_ohlcv(SYMBOL, timeframe=tf, limit=LIMIT)
         df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        df['EMA9'] = ta.ema(df['close'], length=9)
-        df['EMA21'] = ta.ema(df['close'], length=21)
-        df['EMA200'] = ta.ema(df['close'], length=min(len(df)-1, 200))
-        df['RSI'] = ta.rsi(df['close'], length=14)
-        df['VOL_SMA20'] = ta.sma(df['volume'], length=20)
-        df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+        # Pure technical indicators using standard 'ta' library
+        df['EMA9'] = ta.trend.ema_indicator(df['close'], window=9)
+        df['EMA21'] = ta.trend.ema_indicator(df['close'], window=21)
+        df['EMA200'] = ta.trend.ema_indicator(df['close'], window=min(len(df)-1, 200))
+        df['RSI'] = ta.momentum.rsi(df['close'], window=14)
+        df['VOL_SMA20'] = df['volume'].rolling(window=20).mean()
+        df['ATR'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
         
+        # VWAP
         typical_price = (df['high'] + df['low'] + df['close']) / 3
         df['VWAP'] = (typical_price * df['volume']).cumsum() / df['volume'].cumsum()
 
-        st_ind = ta.supertrend(df['high'], df['low'], df['close'], length=10, multiplier=3)
-        df['SUPERTREND_DIR'] = st_ind.iloc[:, 1] if st_ind is not None and not st_ind.empty else 0
+        # StochRSI
+        stoch_rsi = ta.momentum.StochRSIIndicator(df['close'], window=14, smooth1=3, smooth2=3)
+        df['STOCH_K'] = stoch_rsi.stochrsi_k() * 100
 
-        stoch = ta.stochrsi(df['close'], length=14, rsi_length=14, k=3, d=3)
-        df['STOCH_K'] = stoch.iloc[:, 0] if stoch is not None and not stoch.empty else 50.0
+        # ADX
+        adx_ind = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14)
+        df['ADX'] = adx_ind.adx()
 
-        adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
-        df['ADX'] = adx_df.iloc[:, 0] if adx_df is not None and not adx_df.empty else 20.0
+        # CCI
+        df['CCI'] = ta.trend.cci(df['high'], df['low'], df['close'], window=20)
 
-        cci_df = ta.cci(df['high'], df['low'], df['close'], length=20)
-        df['CCI'] = cci_df if cci_df is not None and not cci_df.empty else 0.0
+        # Williams %R
+        df['WILLR'] = ta.momentum.williams_r(df['high'], df['low'], df['close'], lbp=14)
 
-        will_df = ta.willr(df['high'], df['low'], df['close'], length=14)
-        df['WILLR'] = will_df if will_df is not None and not will_df.empty else -50.0
+        # Bollinger Bands Width
+        bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
+        df['BB_WIDTH'] = ((bb.bollinger_hband() - bb.bollinger_lband()) / bb.bollinger_mavg()) * 100
 
-        bb = ta.bbands(df['close'], length=20, std=2)
-        df['BB_WIDTH'] = (bb.iloc[:, 2] - bb.iloc[:, 0]) / bb.iloc[:, 1] * 100 if bb is not None else 2.0
-
-        candle_spread = df['high'] - df['low']
-        candle_spread = candle_spread.replace(0, 0.0001)
+        # Volume Delta
+        candle_spread = (df['high'] - df['low']).replace(0, 0.0001)
         df['DELTA'] = ((df['close'] - df['open']) / candle_spread) * df['volume']
 
-        return df
+        return df.bfill().ffill()
     except Exception:
         return None
 
-# Fetch Data Across All 7 Timeframes
+# Load Data
 tf_data = {}
 for tf in TIMEFRAMES:
     d = fetch_tf_data(tf)
@@ -143,7 +115,7 @@ try:
 except Exception:
     live_price = tf_data['5m'].iloc[-1]['close'] if '5m' in tf_data else 85000.0
 
-# Support / Resistance from 4H
+# 4H Levels
 df_4h = tf_data.get('4h')
 if df_4h is not None and len(df_4h) >= 2:
     p4 = df_4h.iloc[-2]
@@ -153,23 +125,22 @@ if df_4h is not None and len(df_4h) >= 2:
 else:
     pivot, res1, sup1 = live_price, live_price + 400, live_price - 400
 
-# 1D Macro Indicators
+# 1D Levels
 df_1d = tf_data.get('1d')
 if df_1d is not None and len(df_1d) >= 1:
     ema200_1d = df_1d.iloc[-1].get('EMA200', live_price)
-    vwap_1d = df_1d.iloc[-1].get('VWAP', live_price)
 else:
-    ema200_1d, vwap_1d = live_price, live_price
+    ema200_1d = live_price
 
-# ----------------- HEADER BAR -----------------
+# ----------------- UI HEADER -----------------
 st.title("⚡ BTC Perpetual Institutional Terminal")
 h_col1, h_col2, h_col3, h_col4 = st.columns(4)
 h_col1.metric("Live Price", f"${live_price:,.2f}")
 h_col2.metric("Resistance (R1)", f"${res1:,.1f}")
 h_col3.metric("Support (S1)", f"${sup1:,.1f}")
-h_col4.metric("1D Macro 200 EMA", f"${ema200_1d:,.1f}")
+h_col4.metric("1D 200 EMA", f"${ema200_1d:,.1f}")
 
-# ----------------- ACTION CARD LOGIC -----------------
+# ----------------- MASTER ACTION ENGINE -----------------
 m4h_stoch = tf_data['4h'].iloc[-1].get('STOCH_K', 50) if '4h' in tf_data else 50
 m1h_stoch = tf_data['1h'].iloc[-1].get('STOCH_K', 50) if '1h' in tf_data else 50
 m5m_stoch = tf_data['5m'].iloc[-1].get('STOCH_K', 50) if '5m' in tf_data else 50
@@ -181,7 +152,6 @@ near_sup = (live_price - sup1) <= 150
 short_cond = near_res and (m4h_stoch >= 85 and m1h_stoch >= 80 and m5m_stoch >= 80) and vol_5m < 1.2
 long_cond = near_sup and (m4h_stoch <= 20 and m1h_stoch <= 25 and m5m_stoch <= 20) and vol_5m < 1.2
 
-# Lock trade if triggered
 if st.session_state.locked_trade is None:
     if short_cond:
         st.session_state.locked_trade = {
@@ -194,12 +164,10 @@ if st.session_state.locked_trade is None:
             'tp1': live_price + 800.0, 'tp2': live_price + 1800.0
         }
 
-# Render Action Card
 if st.session_state.locked_trade is not None:
     t = st.session_state.locked_trade
     pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
     
-    # Check TP / SL Exits
     hit_sl = (live_price <= t['sl']) if t['type'] == 'LONG' else (live_price >= t['sl'])
     hit_tp2 = (live_price >= t['tp2']) if t['type'] == 'LONG' else (live_price <= t['tp2'])
 
@@ -207,7 +175,7 @@ if st.session_state.locked_trade is not None:
         st.error(f"🔴 {t['type']} TRADE STOP-LOSS HIT (-{abs(pts):.0f} pts). Position exited @ ${live_price:,.1f}.")
         st.session_state.locked_trade = None
     elif hit_tp2:
-        st.success(f"🟢 {t['type']} TARGET 2 HIT (+{pts:.0f} pts PROFIT BOOKED!). Great Trade.")
+        st.success(f"🟢 {t['type']} TARGET 2 HIT (+{pts:.0f} pts PROFIT BOOKED!).")
         st.session_state.locked_trade = None
     else:
         css_class = "trade-short" if t['type'] == 'SHORT' else "trade-long"
@@ -224,12 +192,12 @@ else:
     st.markdown(f"""
     <div class="trade-wait">
         <h3>⏳ NO TRADE / 85%+ STRICT FILTER ACTIVE</h3>
-        <p>Price S1 (${sup1:,.1f}) aur R1 (${res1:,.1f}) ke beech fasa hua hai. System boundaries par verified turning point ka wait kar raha hai.</p>
+        <p>Price S1 (${sup1:,.1f}) aur R1 (${res1:,.1f}) ke beech fasa hua hai. System extreme turning points ka wait kar raha hai.</p>
     </div>
     """, unsafe_allow_html=True)
 
-# ----------------- MULTI-TIMEFRAME TABLE -----------------
-st.subheader("📊 Multi-Timeframe Matrix (All 12 Indicators)")
+# ----------------- TABLE -----------------
+st.subheader("📊 Multi-Timeframe Matrix (All 12 Indicators Live)")
 
 table_rows = []
 for tf in TIMEFRAMES:
@@ -273,7 +241,7 @@ for tf in TIMEFRAMES:
 
 st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-# ----------------- AI ANALYST & CHATBOT -----------------
+# ----------------- AI CHATBOT -----------------
 st.subheader("🤖 Institutional AI Master Analyst")
 
 for role, text in st.session_state.chat_history:
@@ -292,20 +260,19 @@ if user_query:
 
     if t is not None:
         pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
-        reply = f"🔒 Active {t['type']} Trade: Fixed Entry ${t['entry']:,.1f} | SL ${t['sl']:,.1f}. Current PnL: {pts:+.0f} points. Bina SL hit hue panic me na niklein."
+        reply = f"🔒 Active {t['type']} Trade: Fixed Entry ${t['entry']:,.1f} | SL ${t['sl']:,.1f}. Current PnL: {pts:+.0f} points. Panic me exit na karein."
     elif "volume" in q:
-        reply = "📘 Volume Rule: Breakout ke waqt volume > 1.5x hona chahiye. Agar Resistance par volume dry (0.1x-0.4x) hai, toh wo 90% fakeout trap hota hai."
+        reply = "📘 Volume Rule: Resistance par low volume (<0.5x) fakeout hota hai. Real breakout ke liye volume > 1.5x hona chahiye."
     elif "squeeze" in q:
-        reply = "💥 Squeeze Blast: Bollinger Bandwidth < 1.0% hone par market spring ki tarah coil hoti hai. Volume aate hi 1,500-3,000 points ka blast trigger hota hai."
+        reply = "💥 Squeeze Blast: Bollinger Bandwidth < 1.0% hone par market coil hoti hai aur 1,500-3,000 points ka explosive breakout karti hai."
     elif "sl" in q or "stoploss" in q:
-        reply = f"🛡️ SL Level: Active short ke liye ${res1 + 220:,.1f}, active long ke liye ${sup1 - 220:,.1f}."
+        reply = f"🛡️ SL Rule: Resistance R1 ke upar +$220 points buffer par Short ka SL aur Support S1 ke niche -$220 par Long ka SL rakhein."
     else:
-        reply = f"Live Market: BTC ${live_price:,.1f}. Support ${sup1:,.1f} aur Resistance ${res1:,.1f} hai. System extreme turning points ka wait kar raha hai."
+        reply = f"Live Market: BTC ${live_price:,.1f}. Key Resistance ${res1:,.1f} aur Support ${sup1:,.1f} hai. Extreme turning points ka wait karein."
 
     st.session_state.chat_history.append(("assistant", reply))
     with st.chat_message("assistant"):
         st.write(reply)
 
-# Auto refresh every 5 seconds
 time.sleep(5)
 st.rerun()

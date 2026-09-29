@@ -336,10 +336,12 @@ if user_query:
 
     if t is not None:
         pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
-        reply = (
-            f"Active {t['type']} Position @ ${live_price:,.1f}: "
-            f"Entry: ${t['entry']:,.1f} \vert{} Hard SL:${t['sl']:,.1f} | PnL: {pts:+.0f} pts. "
-            f"Jab tak price SL ke upar close na ho, position valid hai."
+        # ✅ YEH LINE PASTE KAREIN:
+reply = (
+    f"Active {t['type']} Position @ ${live_price:,.1f}: "
+    f"Entry: ${t['entry']:,.1f} | Hard SL: ${t['sl']:,.1f} | PnL: {pts:+.0f} pts. "
+    f"Jab tak price SL ke upar close na ho, position valid hai."
+)
         )
     elif "calculator" in q or "pnl" in q:
         reply = "Calculator box live hai: Entry, Qty (Lot) aur Leverage se required margin ($), loss aur profit percentage auto-calculate ho jayega."

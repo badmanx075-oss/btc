@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import ta
 import time
+import requests
 
 st.set_page_config(
     page_title="BTC Institutional Terminal",
@@ -20,6 +21,24 @@ st.markdown("""
     .trade-wait { background-color: #27272a; border-left: 6px solid #eab308; padding: 16px; border-radius: 8px; margin-bottom: 12px; }
 </style>
 """, unsafe_allow_html=True)
+
+# ================= TELEGRAM SECURE INTEGRATION =================
+TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "5984456777")
+
+def send_telegram(message):
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "Markdown"
+        }
+        requests.post(url, data=payload, timeout=4)
+    except Exception:
+        pass
 
 SYMBOL = 'BTC/USDT'
 TIMEFRAMES = ['5m', '15m', '30m', '1h', '2h', '4h', '1d']
@@ -45,6 +64,8 @@ if 'locked_trade' not in st.session_state:
     st.session_state.locked_trade = None
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
+if 'tp1_alerted' not in st.session_state:
+    st.session_state.tp1_alerted = False
 
 def detect_candlestick_pattern(row, prev_row):
     o, h, l, c = row['open'], row['high'], row['low'], row['close']
@@ -116,11 +137,8 @@ try:
 except Exception:
     live_price = tf_data['5m'].iloc[-1]['close'] if '5m' in tf_data else 84000.0
 
-# Dynamic Resistance & Support (Current Price Ke Actual Context Mein)
 df_5m = tf_data.get('5m')
 df_15m = tf_data.get('15m')
-df_4h = tf_data.get('4h')
-
 recent_high = max(df_5m['high'].iloc[-20:].max() if df_5m is not None else live_price + 300, live_price + 150)
 recent_low = min(df_5m['low'].iloc[-20:].min() if df_5m is not None else live_price - 300, live_price - 150)
 
@@ -128,7 +146,7 @@ df_1d = tf_data.get('1d')
 ema200_1d = df_1d.iloc[-1].get('EMA200', live_price) if df_1d is not None and len(df_1d) >= 1 else live_price
 
 # ----------------- UI HEADER -----------------
-st.title("⚡ BTC Perpetual Institutional Terminal (Zero-Lag Early-Trigger)")
+st.title("⚡ BTC Perpetual Institutional Terminal (Telegram Integrated)")
 h_col1, h_col2, h_col3, h_col4 = st.columns(4)
 h_col1.metric("Live Price", f"${live_price:,.2f}")
 h_col2.metric("Local High (Resistance)", f"${recent_high:,.1f}")
@@ -136,48 +154,71 @@ h_col3.metric("Local Low (Support)", f"${recent_low:,.1f}")
 h_col4.metric("1D 200 EMA", f"${ema200_1d:,.1f}")
 
 # ----------------- ZERO-LAG SNIPER TRIGGER ENGINE -----------------
-# Reading direct leading reversal triggers from 5m & 15m
 stoch_5m = df_5m.iloc[-1].get('STOCH_K', 50) if df_5m is not None else 50
 stoch_15m = df_15m.iloc[-1].get('STOCH_K', 50) if df_15m is not None else 50
 cci_5m = df_5m.iloc[-1].get('CCI', 0) if df_5m is not None else 0
 cci_15m = df_15m.iloc[-1].get('CCI', 0) if df_15m is not None else 0
 will_5m = df_5m.iloc[-1].get('WILLR', -50) if df_5m is not None else -50
-will_15m = df_15m.iloc[-1].get('WILLR', -50) if df_15m is not None else -50
 
-# EARLY EXTREME PEAK (SHORT) CONDITION:
-# Top par move shuru hote hi pehli candle par pakadna
 early_short_cond = (stoch_5m >= 88 or stoch_15m >= 90) and (cci_5m > 130 or cci_15m > 130) and (will_5m >= -15)
-
-# EARLY EXTREME DIP (LONG) CONDITION:
-# Bottom par move shuru hote hi dip par pakadna
 early_long_cond = (stoch_5m <= 15 or stoch_15m <= 18) and (cci_5m < -130 or cci_15m < -130) and (will_5m <= -85)
 
-# Lock Trade Engine (Freeze Entry & SL immediately upon early trigger)
+# Lock Trade Engine + Telegram Notifications
 if st.session_state.locked_trade is None:
     if early_short_cond:
         st.session_state.locked_trade = {
             'type': 'SHORT', 'entry': live_price, 'sl': live_price + 280.0,
             'tp1': live_price - 600.0, 'tp2': live_price - 1500.0, 'tp3': live_price - 2500.0
         }
+        st.session_state.tp1_alerted = False
+        msg = (
+            f"🚨 *BTC SNIPER SHORT TRIGGERED!*\n\n"
+            f"• *Entry Rate:* `${live_price:,.1f}`\n"
+            f"• *Hard SL:* `${live_price + 280.0:,.1f}` (+280 pts risk)\n"
+            f"• *Target 1:* `${live_price - 600.0:,.1f}` (+600 pts)\n"
+            f"• *Target 2:* `${live_price - 1500.0:,.1f}` (+1,500 pts)\n"
+            f"• *Target 3:* `${live_price - 2500.0:,.1f}` (+2,500 pts)\n\n"
+            f"⚡ *Signal:* 15m StochRSI {stoch_15m:.0f} Peak Exhaustion @ Local High."
+        )
+        send_telegram(msg)
+
     elif early_long_cond:
         st.session_state.locked_trade = {
             'type': 'LONG', 'entry': live_price, 'sl': live_price - 280.0,
             'tp1': live_price + 600.0, 'tp2': live_price + 1500.0, 'tp3': live_price + 2500.0
         }
+        st.session_state.tp1_alerted = False
+        msg = (
+            f"🚀 *BTC SNIPER LONG TRIGGERED!*\n\n"
+            f"• *Entry Rate:* `${live_price:,.1f}`\n"
+            f"• *Hard SL:* `${live_price - 280.0:,.1f}` (-280 pts risk)\n"
+            f"• *Target 1:* `${live_price + 600.0:,.1f}` (+600 pts)\n"
+            f"• *Target 2:* `${live_price + 1500.0:,.1f}` (+1,500 pts)\n"
+            f"• *Target 3:* `${live_price + 2500.0:,.1f}` (+2,500 pts)\n\n"
+            f"⚡ *Signal:* 15m StochRSI {stoch_15m:.0f} Deep Oversold Bounce."
+        )
+        send_telegram(msg)
 
-# Render Master Action Card
+# Master Action Card & Exits
 if st.session_state.locked_trade is not None:
     t = st.session_state.locked_trade
     pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
     
     hit_sl = (live_price <= t['sl']) if t['type'] == 'LONG' else (live_price >= t['sl'])
+    hit_tp1 = (live_price >= t['tp1']) if t['type'] == 'LONG' else (live_price <= t['tp1'])
     hit_tp2 = (live_price >= t['tp2']) if t['type'] == 'LONG' else (live_price <= t['tp2'])
+
+    if hit_tp1 and not st.session_state.tp1_alerted:
+        send_telegram(f"🎯 *TARGET 1 HIT! (+600 PTS)*\nBTC Rate: `${live_price:,.1f}`\nAction: Stop-Loss ko entry price (`${t['entry']:,.1f}`) par lock karein (Zero-Risk Trade).")
+        st.session_state.tp1_alerted = True
 
     if hit_sl:
         st.error(f"🔴 {t['type']} TRADE STOP-LOSS HIT (-{abs(pts):.0f} pts). Exited @ ${live_price:,.1f}.")
+        send_telegram(f"❌ *STOP-LOSS HIT (-{abs(pts):.0f} pts)*\nClosed @ `${live_price:,.1f}`.")
         st.session_state.locked_trade = None
     elif hit_tp2:
         st.success(f"🟢 {t['type']} TARGET 2 HIT (+{pts:.0f} pts PROFIT BOOKED!). Position closed.")
+        send_telegram(f"💰 *TARGET 2 HIT (+1,500 PTS PROFIT BOOKED!)*\nExited @ `${live_price:,.1f}`.")
         st.session_state.locked_trade = None
     else:
         css_class = "trade-short" if t['type'] == 'SHORT' else "trade-long"
@@ -196,7 +237,7 @@ else:
     <div class="trade-wait">
         <h3>⏳ SCANNING EARLY TURNING POINT (5m/15m Extreme Hunter)</h3>
         <p>Current 5m StochRSI: {stoch_5m:.0f} | 15m StochRSI: {stoch_15m:.0f} | CCI: {cci_5m:.0f}.<br>
-        System extreme saturation (>90 Peak Short ya <15 Deep Dip Buy) aate hi <b>turn hote hi pehli candle par entry lock karega</b>.</p>
+        Extreme saturation aate hi Telegram alert aur screen par entry turant lock ho jayegi.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -268,13 +309,13 @@ if user_query:
 
     if t is not None:
         pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
-        reply = f"🔒 Active {t['type']} Sniper Position: Fixed Entry ${t['entry']:,.1f} | Fixed SL ${t['sl']:,.1f}. Current PnL: {pts:+.0f} points. Panic me early exit na karein."
+        reply = f"🔒 Active {t['type']} Sniper Position: Fixed Entry ${t['entry']:,.1f} \vert{} Fixed SL${t['sl']:,.1f}. Current PnL: {pts:+.0f} points. Panic me early exit na karein."
     elif stoch_5m >= 85 and cci_5m > 120:
         reply = f"🩸 Market Overheated: 5M StochRSI {stoch_5m:.0f} aur CCI {cci_5m:.0f} par hai. Top rejection short entry zone active hai."
     elif stoch_5m <= 18 and cci_5m < -120:
         reply = f"💎 Dip Buying Opportunity: 5M StochRSI {stoch_5m:.0f} oversold hai. Bounce ke liye Long entry favoured hai."
     else:
-        reply = f"Live Market: BTC ${live_price:,.1f}. Abhi momentum transition me hai. Pehla clear extreme turn aate hi system trade freeze karega."
+        reply = f"Live Market: BTC ${live_price:,.1f}. Momentum scanning chal raha hai. Turning point par Telegram par instant notification aayega."
 
     st.session_state.chat_history.append(("assistant", reply))
     with st.chat_message("assistant"):

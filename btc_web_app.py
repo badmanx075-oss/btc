@@ -336,7 +336,8 @@ if user_query:
 
     if t is not None:
         pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
-        # ✅ YEH LINE PASTE KAREIN:
+        reply = f"Active {t['type']} Position @ ${live_price:,.1f}: Entry: ${t['entry']:,.1f} | Hard SL: ${t['sl']:,.1f} | PnL: {pts:+.0f} pts. Position is valid."
+    elif "calculator" in q or "pnl" in q:
 reply = (
     f"Active {t['type']} Position @ ${live_price:,.1f}: "
     f"Entry: ${t['entry']:,.1f} | Hard SL: ${t['sl']:,.1f} | PnL: {pts:+.0f} pts. "

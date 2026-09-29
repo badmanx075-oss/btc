@@ -116,8 +116,11 @@ try:
 except Exception:
     live_price = tf_data['5m'].iloc[-1]['close'] if '5m' in tf_data else 84000.0
 
+# Dynamic Resistance & Support (Current Price Ke Actual Context Mein)
 df_5m = tf_data.get('5m')
 df_15m = tf_data.get('15m')
+df_4h = tf_data.get('4h')
+
 recent_high = max(df_5m['high'].iloc[-20:].max() if df_5m is not None else live_price + 300, live_price + 150)
 recent_low = min(df_5m['low'].iloc[-20:].min() if df_5m is not None else live_price - 300, live_price - 150)
 
@@ -133,15 +136,23 @@ h_col3.metric("Local Low (Support)", f"${recent_low:,.1f}")
 h_col4.metric("1D 200 EMA", f"${ema200_1d:,.1f}")
 
 # ----------------- ZERO-LAG SNIPER TRIGGER ENGINE -----------------
+# Reading direct leading reversal triggers from 5m & 15m
 stoch_5m = df_5m.iloc[-1].get('STOCH_K', 50) if df_5m is not None else 50
 stoch_15m = df_15m.iloc[-1].get('STOCH_K', 50) if df_15m is not None else 50
 cci_5m = df_5m.iloc[-1].get('CCI', 0) if df_5m is not None else 0
 cci_15m = df_15m.iloc[-1].get('CCI', 0) if df_15m is not None else 0
 will_5m = df_5m.iloc[-1].get('WILLR', -50) if df_5m is not None else -50
+will_15m = df_15m.iloc[-1].get('WILLR', -50) if df_15m is not None else -50
 
+# EARLY EXTREME PEAK (SHORT) CONDITION:
+# Top par move shuru hote hi pehli candle par pakadna
 early_short_cond = (stoch_5m >= 88 or stoch_15m >= 90) and (cci_5m > 130 or cci_15m > 130) and (will_5m >= -15)
+
+# EARLY EXTREME DIP (LONG) CONDITION:
+# Bottom par move shuru hote hi dip par pakadna
 early_long_cond = (stoch_5m <= 15 or stoch_15m <= 18) and (cci_5m < -130 or cci_15m < -130) and (will_5m <= -85)
 
+# Lock Trade Engine (Freeze Entry & SL immediately upon early trigger)
 if st.session_state.locked_trade is None:
     if early_short_cond:
         st.session_state.locked_trade = {
@@ -154,6 +165,7 @@ if st.session_state.locked_trade is None:
             'tp1': live_price + 600.0, 'tp2': live_price + 1500.0, 'tp3': live_price + 2500.0
         }
 
+# Render Master Action Card
 if st.session_state.locked_trade is not None:
     t = st.session_state.locked_trade
     pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
@@ -174,9 +186,9 @@ if st.session_state.locked_trade is not None:
             <h3>⚡ ACTIVE {t['type']} SNIPER POSITION RUNNING (PnL: {pts:+.0f} Pts)</h3>
             <p><b>• FIXED ENTRY:</b> ${t['entry']:,.1f} (FROZEN - Caught at the Turning Point)<br>
             <b>• HARD SL:</b> ${t['sl']:,.1f} (FROZEN - Risk Defined)<br>
-            <b>• TARGET 1 (TP1):</b> ${t['tp1']:,.1f} [+600 pts -> Shift SL to Entry]<br>
-            <b>• TARGET 2 (TP2):</b> ${t['tp2']:,.1f} [+1,500 pts Big Target]<br>
-            <b>• RUNNER TARGET (TP3):</b> ${t.get('tp3', t['tp2']):,.1f} [+2,500 pts Mega Runway]</p>
+            <b>• TARGET 1 (TP1):</b> ${t['tp1']:,.1f} [+{600} pts -> Shift SL to Entry]<br>
+            <b>• TARGET 2 (TP2):</b> ${t['tp2']:,.1f} [+{1500} pts Big Target]<br>
+            <b>• RUNNER TARGET (TP3):</b> ${t.get('tp3', t['tp2']):,.1f} [+{2500} pts Mega Runway]</p>
         </div>
         """, unsafe_allow_html=True)
 else:
@@ -184,7 +196,7 @@ else:
     <div class="trade-wait">
         <h3>⏳ SCANNING EARLY TURNING POINT (5m/15m Extreme Hunter)</h3>
         <p>Current 5m StochRSI: {stoch_5m:.0f} | 15m StochRSI: {stoch_15m:.0f} | CCI: {cci_5m:.0f}.<br>
-        System extreme saturation aate hi <b>turn hote hi pehli candle par entry lock karega</b>.</p>
+        System extreme saturation (>90 Peak Short ya <15 Deep Dip Buy) aate hi <b>turn hote hi pehli candle par entry lock karega</b>.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -251,17 +263,18 @@ if user_query:
     with st.chat_message("user"):
         st.write(user_query)
 
+    q = user_query.lower()
     t = st.session_state.locked_trade
 
     if t is not None:
         pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
-        reply = "Active " + str(t['type']) + " Position: Entry $" + str(round(t['entry'], 1)) + " | SL $" + str(round(t['sl'], 1)) + " | Running PnL: " + str(round(pts, 0)) + " pts."
+        reply = f"🔒 Active {t['type']} Sniper Position: Fixed Entry ${t['entry']:,.1f} | Fixed SL ${t['sl']:,.1f}. Current PnL: {pts:+.0f} points. Panic me early exit na karein."
     elif stoch_5m >= 85 and cci_5m > 120:
-        reply = "Market Overheated: 5M StochRSI " + str(round(stoch_5m, 0)) + " aur CCI " + str(round(cci_5m, 0)) + " par hai. Top rejection short entry zone active hai."
+        reply = f"🩸 Market Overheated: 5M StochRSI {stoch_5m:.0f} aur CCI {cci_5m:.0f} par hai. Top rejection short entry zone active hai."
     elif stoch_5m <= 18 and cci_5m < -120:
-        reply = "Dip Buying Opportunity: 5M StochRSI " + str(round(stoch_5m, 0)) + " oversold hai. Bounce ke liye Long entry favoured hai."
+        reply = f"💎 Dip Buying Opportunity: 5M StochRSI {stoch_5m:.0f} oversold hai. Bounce ke liye Long entry favoured hai."
     else:
-        reply = "Live Market: BTC $" + str(round(live_price, 1)) + ". Momentum transition me hai. Extreme turn aate hi system trade freeze karega."
+        reply = f"Live Market: BTC ${live_price:,.1f}. Abhi momentum transition me hai. Pehla clear extreme turn aate hi system trade freeze karega."
 
     st.session_state.chat_history.append(("assistant", reply))
     with st.chat_message("assistant"):

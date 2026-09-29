@@ -198,11 +198,9 @@ st.subheader("🧮 Futures Position Size, Risk & Profit Calculator")
 with st.container():
     st.markdown('<div class="calc-card">', unsafe_allow_html=True)
     
-    # Defaults from active trade or market
     active_type = st.session_state.locked_trade['type'] if st.session_state.locked_trade else "SHORT"
     active_entry = float(st.session_state.locked_trade['entry']) if st.session_state.locked_trade else float(live_price)
     
-    # System Suggestions
     if active_type == "SHORT":
         sys_sug_sl = active_entry + 280.0
         sys_sug_tp1 = active_entry - 600.0
@@ -212,7 +210,6 @@ with st.container():
         sys_sug_tp1 = active_entry + 600.0
         sys_sug_tp2 = active_entry + 1500.0
 
-    # Step 1: Input Row (Entry, Qty, Leverage)
     col_dir, col_entry, col_qty, col_lev = st.columns([1.5, 2, 2, 2.5])
     with col_dir:
         direction = st.selectbox("Direction", ["SHORT", "LONG"], index=0 if active_type == "SHORT" else 1)
@@ -223,21 +220,17 @@ with st.container():
     with col_lev:
         leverage = st.slider("Leverage (x)", min_value=1, max_value=50, value=10, step=1)
 
-    # Position Math
     total_position_usd = qty_btc * entry_val
     margin_paid_usd = total_position_usd / leverage if leverage > 0 else total_position_usd
 
-    # Display Margin Amount
     st.info(f"💵 **Amount You Pay (Margin Required):** `${margin_paid_usd:,.2f}` | **Total Position Value:** `${total_position_usd:,.2f}` ({qty_btc:.3f} BTC)")
 
-    # Step 2: Stop-Loss & Target Input with System Suggestions
     col_sl_in, col_tp_in = st.columns(2)
     
     with col_sl_in:
         st.markdown(f"**🛡️ Stop-Loss Setup** *(System Suggests: `${sys_sug_sl:,.1f}`)*")
         sl_val = st.number_input("Enter Your Stop-Loss ($)", value=round(sys_sug_sl, 1), step=10.0)
         
-        # SL Calculations
         if direction == "LONG":
             sl_points = entry_val - sl_val
             sl_loss_usd = (sl_points / entry_val) * total_position_usd if entry_val > 0 else 0
@@ -256,7 +249,6 @@ with st.container():
         st.markdown(f"**🎯 Take-Profit / Target Setup** *(TP1: `${sys_sug_tp1:,.1f}` | TP2: `${sys_sug_tp2:,.1f}`)*")
         tp_val = st.number_input("Enter Your Profit Target ($)", value=round(sys_sug_tp1, 1), step=10.0)
         
-        # TP Calculations
         if direction == "LONG":
             tp_points = tp_val - entry_val
             tp_profit_usd = (tp_points / entry_val) * total_position_usd if entry_val > 0 else 0

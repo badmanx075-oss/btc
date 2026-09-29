@@ -10,7 +10,7 @@ st.set_page_config(
     page_title="BTC Institutional Terminal",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 st.markdown("""
@@ -22,13 +22,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Secure Telegram Secrets
+# ================= TELEGRAM SECURE INTEGRATION =================
 TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "5984456777")
 
 def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN:
-        return
+        return False
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
@@ -36,9 +36,21 @@ def send_telegram(message):
             "text": message,
             "parse_mode": "Markdown"
         }
-        requests.post(url, data=payload, timeout=4)
+        r = requests.post(url, data=payload, timeout=4)
+        return r.status_code == 200
     except Exception:
-        pass
+        return False
+
+# Sidebar Telegram Test Button
+with st.sidebar:
+    st.header("⚙️ Telegram Settings")
+    st.info(f"Target Chat ID: {TELEGRAM_CHAT_ID}")
+    if st.button("🔔 Send Test Telegram Alert"):
+        success = send_telegram("✅ *Telegram Alert Connected Successfully!*\n\nAapka BTC Institutional Terminal bilkul ready hai. Jab bhi market mein naya Setup trigger hoga, yahan instant notification aayega.")
+        if success:
+            st.success("Test message bhej diya gaya hai! Apna Telegram app check karein.")
+        else:
+            st.error("Message nahi gaya. Please check karein ki Streamlit Secrets mein TELEGRAM_BOT_TOKEN sahi dala hai ya nahi.")
 
 SYMBOL = 'BTC/USDT'
 TIMEFRAMES = ['5m', '15m', '30m', '1h', '2h', '4h', '1d']
@@ -198,7 +210,6 @@ if st.session_state.locked_trade is None:
         )
         send_telegram(msg)
 
-# Master Action Card & Exits
 if st.session_state.locked_trade is not None:
     t = st.session_state.locked_trade
     pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
@@ -308,11 +319,11 @@ if user_query:
 
     if t is not None:
         pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
-        reply = f"🔒 Active {t['type']} Sniper Position: Fixed Entry ${t['entry']:,.1f} \vert{} Fixed SL${t['sl']:,.1f}. Current PnL: {pts:+.0f} points. Panic me early exit na karein."
+        reply = f"Active {t['type']} Sniper Position: Fixed Entry ${t['entry']:,.1f} \vert{} Fixed SL${t['sl']:,.1f}. Current PnL: {pts:+.0f} points. Panic me early exit na karein."
     elif stoch_5m >= 85 and cci_5m > 120:
-        reply = f"🩸 Market Overheated: 5M StochRSI {stoch_5m:.0f} aur CCI {cci_5m:.0f} par hai. Top rejection short entry zone active hai."
+        reply = f"Market Overheated: 5M StochRSI {stoch_5m:.0f} aur CCI {cci_5m:.0f} par hai. Top rejection short entry zone active hai."
     elif stoch_5m <= 18 and cci_5m < -120:
-        reply = f"💎 Dip Buying Opportunity: 5M StochRSI {stoch_5m:.0f} oversold hai. Bounce ke liye Long entry favoured hai."
+        reply = f"Dip Buying Opportunity: 5M StochRSI {stoch_5m:.0f} oversold hai. Bounce ke liye Long entry favoured hai."
     else:
         reply = f"Live Market: BTC ${live_price:,.1f}. Momentum scanning chal raha hai. Turning point par Telegram par instant notification aayega."
 

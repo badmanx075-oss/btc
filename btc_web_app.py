@@ -22,7 +22,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ================= TELEGRAM SECURE INTEGRATION =================
+# Secure Telegram Secrets
 TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "5984456777")
 
@@ -163,7 +163,6 @@ will_5m = df_5m.iloc[-1].get('WILLR', -50) if df_5m is not None else -50
 early_short_cond = (stoch_5m >= 88 or stoch_15m >= 90) and (cci_5m > 130 or cci_15m > 130) and (will_5m >= -15)
 early_long_cond = (stoch_5m <= 15 or stoch_15m <= 18) and (cci_5m < -130 or cci_15m < -130) and (will_5m <= -85)
 
-# Lock Trade Engine + Telegram Notifications
 if st.session_state.locked_trade is None:
     if early_short_cond:
         st.session_state.locked_trade = {
@@ -178,7 +177,7 @@ if st.session_state.locked_trade is None:
             f"• *Target 1:* `${live_price - 600.0:,.1f}` (+600 pts)\n"
             f"• *Target 2:* `${live_price - 1500.0:,.1f}` (+1,500 pts)\n"
             f"• *Target 3:* `${live_price - 2500.0:,.1f}` (+2,500 pts)\n\n"
-            f"⚡ *Signal:* 15m StochRSI {stoch_15m:.0f} Peak Exhaustion @ Local High."
+            f"⚡ *Signal:* 15m StochRSI {stoch_15m:.0f} Peak Exhaustion."
         )
         send_telegram(msg)
 
@@ -225,8 +224,8 @@ if st.session_state.locked_trade is not None:
         st.markdown(f"""
         <div class="{css_class}">
             <h3>⚡ ACTIVE {t['type']} SNIPER POSITION RUNNING (PnL: {pts:+.0f} Pts)</h3>
-            <p><b>• FIXED ENTRY:</b> ${t['entry']:,.1f} (FROZEN - Caught at the Turning Point)<br>
-            <b>• HARD SL:</b> ${t['sl']:,.1f} (FROZEN - Risk Defined)<br>
+            <p><b>• FIXED ENTRY:</b> ${t['entry']:,.1f} (FROZEN)<br>
+            <b>• HARD SL:</b> ${t['sl']:,.1f} (FROZEN)<br>
             <b>• TARGET 1 (TP1):</b> ${t['tp1']:,.1f} [+{600} pts -> Shift SL to Entry]<br>
             <b>• TARGET 2 (TP2):</b> ${t['tp2']:,.1f} [+{1500} pts Big Target]<br>
             <b>• RUNNER TARGET (TP3):</b> ${t.get('tp3', t['tp2']):,.1f} [+{2500} pts Mega Runway]</p>
@@ -241,7 +240,7 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-# ----------------- TABLE (ALL 12 INDICATORS LIVE) -----------------
+# ----------------- TABLE -----------------
 st.subheader("📊 Multi-Timeframe Matrix (All 12 Indicators Live)")
 
 table_rows = []

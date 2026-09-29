@@ -18,7 +18,9 @@ st.markdown("""
     .trade-short { background-color: #7f1d1d; border-left: 6px solid #ef4444; padding: 16px; border-radius: 8px; margin-bottom: 12px; }
     .trade-long { background-color: #14532d; border-left: 6px solid #22c55e; padding: 16px; border-radius: 8px; margin-bottom: 12px; }
     .trade-wait { background-color: #27272a; border-left: 6px solid #eab308; padding: 16px; border-radius: 8px; margin-bottom: 12px; }
-    .calc-box { background-color: #18181b; border: 1px solid #3f3f46; border-radius: 10px; padding: 16px; margin-top: 15px; }
+    .calc-card { background-color: #18181b; border: 1px solid #3f3f46; border-radius: 10px; padding: 16px; margin-bottom: 15px; }
+    .metric-value-green { color: #22c55e; font-weight: bold; }
+    .metric-value-red { color: #ef4444; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -174,8 +176,8 @@ if st.session_state.locked_trade is not None:
         st.markdown(f"""
         <div class="{css_class}">
             <h3>⚡ ACTIVE {t['type']} SNIPER POSITION RUNNING (PnL: {pts:+.0f} Pts)</h3>
-            <p><b>• FIXED ENTRY:</b> ${t['entry']:,.1f} (FROZEN - Caught at the Turning Point)<br>
-            <b>• HARD SL:</b> ${t['sl']:,.1f} (FROZEN - Risk Defined)<br>
+            <p><b>• FIXED ENTRY:</b> ${t['entry']:,.1f} (FROZEN)<br>
+            <b>• HARD SL:</b> ${t['sl']:,.1f} (FROZEN)<br>
             <b>• TARGET 1 (TP1):</b> ${t['tp1']:,.1f} [+600 pts -> Shift SL to Entry]<br>
             <b>• TARGET 2 (TP2):</b> ${t['tp2']:,.1f} [+1,500 pts Big Target]<br>
             <b>• RUNNER TARGET (TP3):</b> ${t.get('tp3', t['tp2']):,.1f} [+2,500 pts Mega Runway]</p>
@@ -189,6 +191,90 @@ else:
         System extreme turning points par <b>pehli candle par entry lock karega</b>.</p>
     </div>
     """, unsafe_allow_html=True)
+
+# ----------------- INTERACTIVE ADVANCED PnL, LOT & RISK CALCULATOR -----------------
+st.subheader("🧮 Futures Position Size, Risk & Profit Calculator")
+
+with st.container():
+    st.markdown('<div class="calc-card">', unsafe_allow_html=True)
+    
+    # Defaults from active trade or market
+    active_type = st.session_state.locked_trade['type'] if st.session_state.locked_trade else "SHORT"
+    active_entry = float(st.session_state.locked_trade['entry']) if st.session_state.locked_trade else float(live_price)
+    
+    # System Suggestions
+    if active_type == "SHORT":
+        sys_sug_sl = active_entry + 280.0
+        sys_sug_tp1 = active_entry - 600.0
+        sys_sug_tp2 = active_entry - 1500.0
+    else:
+        sys_sug_sl = active_entry - 280.0
+        sys_sug_tp1 = active_entry + 600.0
+        sys_sug_tp2 = active_entry + 1500.0
+
+    # Step 1: Input Row (Entry, Qty, Leverage)
+    col_dir, col_entry, col_qty, col_lev = st.columns([1.5, 2, 2, 2.5])
+    with col_dir:
+        direction = st.selectbox("Direction", ["SHORT", "LONG"], index=0 if active_type == "SHORT" else 1)
+    with col_entry:
+        entry_val = st.number_input("Entry Price ($)", value=round(active_entry, 1), step=10.0)
+    with col_qty:
+        qty_btc = st.number_input("Qty / Lot Size (BTC)", value=0.05, step=0.01, min_value=0.001, format="%.3f")
+    with col_lev:
+        leverage = st.slider("Leverage (x)", min_value=1, max_value=50, value=10, step=1)
+
+    # Position Math
+    total_position_usd = qty_btc * entry_val
+    margin_paid_usd = total_position_usd / leverage if leverage > 0 else total_position_usd
+
+    # Display Margin Amount
+    st.info(f"💵 **Amount You Pay (Margin Required):** `${margin_paid_usd:,.2f}` | **Total Position Value:** `${total_position_usd:,.2f}` ({qty_btc:.3f} BTC)")
+
+    # Step 2: Stop-Loss & Target Input with System Suggestions
+    col_sl_in, col_tp_in = st.columns(2)
+    
+    with col_sl_in:
+        st.markdown(f"**🛡️ Stop-Loss Setup** *(System Suggests: `${sys_sug_sl:,.1f}`)*")
+        sl_val = st.number_input("Enter Your Stop-Loss ($)", value=round(sys_sug_sl, 1), step=10.0)
+        
+        # SL Calculations
+        if direction == "LONG":
+            sl_points = entry_val - sl_val
+            sl_loss_usd = (sl_points / entry_val) * total_position_usd if entry_val > 0 else 0
+        else:
+            sl_points = sl_val - entry_val
+            sl_loss_usd = (sl_points / entry_val) * total_position_usd if entry_val > 0 else 0
+            
+        sl_roe = (sl_loss_usd / margin_paid_usd) * 100 if margin_paid_usd > 0 else 0
+        st.markdown(f"""
+        * **Loss in Points:** `{sl_points:+.1f} Pts`
+        * **Loss in Dollars:** <span class="metric-value-red">`-${abs(sl_loss_usd):,.2f}`</span>
+        * **Loss Percentage (ROE):** <span class="metric-value-red">`-{abs(sl_roe):.2f}%`</span>
+        """, unsafe_allow_html=True)
+
+    with col_tp_in:
+        st.markdown(f"**🎯 Take-Profit / Target Setup** *(TP1: `${sys_sug_tp1:,.1f}` | TP2: `${sys_sug_tp2:,.1f}`)*")
+        tp_val = st.number_input("Enter Your Profit Target ($)", value=round(sys_sug_tp1, 1), step=10.0)
+        
+        # TP Calculations
+        if direction == "LONG":
+            tp_points = tp_val - entry_val
+            tp_profit_usd = (tp_points / entry_val) * total_position_usd if entry_val > 0 else 0
+        else:
+            tp_points = entry_val - tp_val
+            tp_profit_usd = (tp_points / entry_val) * total_position_usd if entry_val > 0 else 0
+            
+        tp_roe = (tp_profit_usd / margin_paid_usd) * 100 if margin_paid_usd > 0 else 0
+        rr_ratio = abs(tp_points / sl_points) if sl_points > 0 else 0
+        
+        st.markdown(f"""
+        * **Gain in Points:** `{tp_points:+.1f} Pts`
+        * **Profit in Dollars:** <span class="metric-value-green">`+${tp_profit_usd:,.2f}`</span>
+        * **Profit Percentage (ROE):** <span class="metric-value-green">`+{tp_roe:.2f}%`</span>
+        * **Risk-to-Reward Ratio (R:R):** `1 : {rr_ratio:.2f}`
+        """, unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ----------------- TABLE (ALL 12 INDICATORS LIVE) -----------------
 st.subheader("📊 Multi-Timeframe Matrix (All 12 Indicators Live)")
@@ -239,47 +325,6 @@ for tf in TIMEFRAMES:
 if table_rows:
     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-# ----------------- INTERACTIVE FUTURES PnL & RISK CALCULATOR -----------------
-st.subheader("🧮 Interactive Futures PnL, Leverage & Risk Calculator")
-
-with st.expander("👉 Click to Open / Calculate Profit, Loss & Leverage", expanded=True):
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        calc_direction = st.selectbox("Trade Direction", ["SHORT", "LONG"], index=0 if (st.session_state.locked_trade and st.session_state.locked_trade['type'] == 'SHORT') else 1)
-        calc_margin = st.number_input("Margin Amount ($) [Aapka Paisa]", value=100.0, step=10.0, min_value=1.0)
-    with c2:
-        calc_leverage = st.slider("Leverage (x)", min_value=1, max_value=50, value=10, step=1)
-        default_entry = float(st.session_state.locked_trade['entry']) if st.session_state.locked_trade else float(live_price)
-        calc_entry = st.number_input("Entry Price ($)", value=round(default_entry, 1), step=10.0)
-    with c3:
-        default_target = float(st.session_state.locked_trade['tp1']) if st.session_state.locked_trade else (calc_entry - 600.0 if calc_direction == 'SHORT' else calc_entry + 600.0)
-        calc_exit = st.number_input("Exit / Target / SL Price ($)", value=round(default_target, 1), step=10.0)
-        
-    # Math Calculations
-    position_size_usd = calc_margin * calc_leverage
-    btc_qty = position_size_usd / calc_entry if calc_entry > 0 else 0
-
-    if calc_direction == "LONG":
-        point_diff = calc_exit - calc_entry
-        est_liq = calc_entry * (1 - (1 / calc_leverage) + 0.005)
-    else:
-        point_diff = calc_entry - calc_exit
-        est_liq = calc_entry * (1 + (1 / calc_leverage) - 0.005)
-
-    net_pnl_usd = (point_diff / calc_entry) * position_size_usd if calc_entry > 0 else 0
-    roe_percentage = (net_pnl_usd / calc_margin) * 100 if calc_margin > 0 else 0
-
-    st.markdown("---")
-    r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Total Position Size", f"${position_size_usd:,.0f}", f"{btc_qty:.4f} BTC")
-    
-    pnl_label = "Net Profit" if net_pnl_usd >= 0 else "Net Loss"
-    r2.metric(f"Estimated {pnl_label} ($)", f"${net_pnl_usd:+,.2f}", f"{point_diff:+.1f} Points")
-    
-    roe_color = "normal" if roe_percentage >= 0 else "inverse"
-    r3.metric("ROE (Profit/Loss % on Margin)", f"{roe_percentage:+.2f}%")
-    r4.metric("Estimated Liq. Price", f"${est_liq:,.1f}", "Be Cautious")
-
 # ----------------- AI CHATBOT -----------------
 st.subheader("🤖 Institutional AI Master Analyst")
 
@@ -301,11 +346,11 @@ if user_query:
         pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
         reply = (
             f"🔒 Active {t['type']} Position Status @ ${live_price:,.1f}:\n"
-            f"• Entry: ${t['entry']:,.1f} | Hard SL: ${t['sl']:,.1f} | Current PnL: {pts:+.0f} points.\n"
-            f"• Note: Jab tak price SL (${t['sl']:,.1f}) ke upar close na ho, position valid hai. 15m/30m/1h indicators abhi bhi overbought exhaustion dikha rahe hain."
+            f"• Entry: ${t['entry']:,.1f} \vert{} Hard SL:${t['sl']:,.1f} | Current PnL: {pts:+.0f} points.\n"
+            f"• Note: Jab tak price SL (${t['sl']:,.1f}) ke upar na nikle, position valid hai. 15m/30m/1h indicators abhi bhi overbought exhaustion zone mein hain."
         )
     elif "calculator" in q or "pnl" in q:
-        reply = "🧮 Calculator widget upar live hai! Wahan aap margin amount, leverage slider aur target price daal kar exact Dollar aur % profit/loss calculate kar sakte hain."
+        reply = "🧮 Calculator box live hai: Wahan Entry, Qty (Lot) aur Leverage daalte hi aapka required margin ($), dollar loss aur profit percentage auto-calculate ho jayega."
     else:
         reply = f"Live Market: BTC ${live_price:,.1f}. Key levels monitor ho rahe hain. Extreme turning points par system early triggers de raha hai."
 

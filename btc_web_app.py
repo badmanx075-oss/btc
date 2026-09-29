@@ -18,6 +18,7 @@ st.markdown("""
     .trade-short { background-color: #7f1d1d; border-left: 6px solid #ef4444; padding: 16px; border-radius: 8px; margin-bottom: 12px; }
     .trade-long { background-color: #14532d; border-left: 6px solid #22c55e; padding: 16px; border-radius: 8px; margin-bottom: 12px; }
     .trade-wait { background-color: #27272a; border-left: 6px solid #eab308; padding: 16px; border-radius: 8px; margin-bottom: 12px; }
+    .calc-box { background-color: #18181b; border: 1px solid #3f3f46; border-radius: 10px; padding: 16px; margin-top: 15px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -116,11 +117,8 @@ try:
 except Exception:
     live_price = tf_data['5m'].iloc[-1]['close'] if '5m' in tf_data else 84000.0
 
-# Dynamic Resistance & Support (Current Price Ke Actual Context Mein)
 df_5m = tf_data.get('5m')
 df_15m = tf_data.get('15m')
-df_4h = tf_data.get('4h')
-
 recent_high = max(df_5m['high'].iloc[-20:].max() if df_5m is not None else live_price + 300, live_price + 150)
 recent_low = min(df_5m['low'].iloc[-20:].min() if df_5m is not None else live_price - 300, live_price - 150)
 
@@ -128,31 +126,23 @@ df_1d = tf_data.get('1d')
 ema200_1d = df_1d.iloc[-1].get('EMA200', live_price) if df_1d is not None and len(df_1d) >= 1 else live_price
 
 # ----------------- UI HEADER -----------------
-st.title("⚡ BTC Perpetual Institutional Terminal (Zero-Lag Early-Trigger)")
+st.title("⚡ BTC Perpetual Institutional Terminal")
 h_col1, h_col2, h_col3, h_col4 = st.columns(4)
 h_col1.metric("Live Price", f"${live_price:,.2f}")
 h_col2.metric("Local High (Resistance)", f"${recent_high:,.1f}")
 h_col3.metric("Local Low (Support)", f"${recent_low:,.1f}")
 h_col4.metric("1D 200 EMA", f"${ema200_1d:,.1f}")
 
-# ----------------- ZERO-LAG SNIPER TRIGGER ENGINE -----------------
-# Reading direct leading reversal triggers from 5m & 15m
+# ----------------- SNIPER ENGINE -----------------
 stoch_5m = df_5m.iloc[-1].get('STOCH_K', 50) if df_5m is not None else 50
 stoch_15m = df_15m.iloc[-1].get('STOCH_K', 50) if df_15m is not None else 50
 cci_5m = df_5m.iloc[-1].get('CCI', 0) if df_5m is not None else 0
 cci_15m = df_15m.iloc[-1].get('CCI', 0) if df_15m is not None else 0
 will_5m = df_5m.iloc[-1].get('WILLR', -50) if df_5m is not None else -50
-will_15m = df_15m.iloc[-1].get('WILLR', -50) if df_15m is not None else -50
 
-# EARLY EXTREME PEAK (SHORT) CONDITION:
-# Top par move shuru hote hi pehli candle par pakadna
 early_short_cond = (stoch_5m >= 88 or stoch_15m >= 90) and (cci_5m > 130 or cci_15m > 130) and (will_5m >= -15)
-
-# EARLY EXTREME DIP (LONG) CONDITION:
-# Bottom par move shuru hote hi dip par pakadna
 early_long_cond = (stoch_5m <= 15 or stoch_15m <= 18) and (cci_5m < -130 or cci_15m < -130) and (will_5m <= -85)
 
-# Lock Trade Engine (Freeze Entry & SL immediately upon early trigger)
 if st.session_state.locked_trade is None:
     if early_short_cond:
         st.session_state.locked_trade = {
@@ -174,10 +164,10 @@ if st.session_state.locked_trade is not None:
     hit_tp2 = (live_price >= t['tp2']) if t['type'] == 'LONG' else (live_price <= t['tp2'])
 
     if hit_sl:
-        st.error(f"🔴 {t['type']} TRADE STOP-LOSS HIT (-{abs(pts):.0f} pts). Exited @ ${live_price:,.1f}.")
+        st.error(f"🔴 {t['type']} TRADE STOP-LOSS HIT (-{abs(pts):.0f} pts). Position exited @ ${live_price:,.1f}.")
         st.session_state.locked_trade = None
     elif hit_tp2:
-        st.success(f"🟢 {t['type']} TARGET 2 HIT (+{pts:.0f} pts PROFIT BOOKED!). Position closed.")
+        st.success(f"🟢 {t['type']} TARGET 2 HIT (+{pts:.0f} pts PROFIT BOOKED!).")
         st.session_state.locked_trade = None
     else:
         css_class = "trade-short" if t['type'] == 'SHORT' else "trade-long"
@@ -186,17 +176,17 @@ if st.session_state.locked_trade is not None:
             <h3>⚡ ACTIVE {t['type']} SNIPER POSITION RUNNING (PnL: {pts:+.0f} Pts)</h3>
             <p><b>• FIXED ENTRY:</b> ${t['entry']:,.1f} (FROZEN - Caught at the Turning Point)<br>
             <b>• HARD SL:</b> ${t['sl']:,.1f} (FROZEN - Risk Defined)<br>
-            <b>• TARGET 1 (TP1):</b> ${t['tp1']:,.1f} [+{600} pts -> Shift SL to Entry]<br>
-            <b>• TARGET 2 (TP2):</b> ${t['tp2']:,.1f} [+{1500} pts Big Target]<br>
-            <b>• RUNNER TARGET (TP3):</b> ${t.get('tp3', t['tp2']):,.1f} [+{2500} pts Mega Runway]</p>
+            <b>• TARGET 1 (TP1):</b> ${t['tp1']:,.1f} [+600 pts -> Shift SL to Entry]<br>
+            <b>• TARGET 2 (TP2):</b> ${t['tp2']:,.1f} [+1,500 pts Big Target]<br>
+            <b>• RUNNER TARGET (TP3):</b> ${t.get('tp3', t['tp2']):,.1f} [+2,500 pts Mega Runway]</p>
         </div>
         """, unsafe_allow_html=True)
 else:
     st.markdown(f"""
     <div class="trade-wait">
         <h3>⏳ SCANNING EARLY TURNING POINT (5m/15m Extreme Hunter)</h3>
-        <p>Current 5m StochRSI: {stoch_5m:.0f} | 15m StochRSI: {stoch_15m:.0f} | CCI: {cci_5m:.0f}.<br>
-        System extreme saturation (>90 Peak Short ya <15 Deep Dip Buy) aate hi <b>turn hote hi pehli candle par entry lock karega</b>.</p>
+        <p>5m StochRSI: {stoch_5m:.0f} | 15m StochRSI: {stoch_15m:.0f} | CCI: {cci_5m:.0f}.<br>
+        System extreme turning points par <b>pehli candle par entry lock karega</b>.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -249,6 +239,47 @@ for tf in TIMEFRAMES:
 if table_rows:
     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
+# ----------------- INTERACTIVE FUTURES PnL & RISK CALCULATOR -----------------
+st.subheader("🧮 Interactive Futures PnL, Leverage & Risk Calculator")
+
+with st.expander("👉 Click to Open / Calculate Profit, Loss & Leverage", expanded=True):
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        calc_direction = st.selectbox("Trade Direction", ["SHORT", "LONG"], index=0 if (st.session_state.locked_trade and st.session_state.locked_trade['type'] == 'SHORT') else 1)
+        calc_margin = st.number_input("Margin Amount ($) [Aapka Paisa]", value=100.0, step=10.0, min_value=1.0)
+    with c2:
+        calc_leverage = st.slider("Leverage (x)", min_value=1, max_value=50, value=10, step=1)
+        default_entry = float(st.session_state.locked_trade['entry']) if st.session_state.locked_trade else float(live_price)
+        calc_entry = st.number_input("Entry Price ($)", value=round(default_entry, 1), step=10.0)
+    with c3:
+        default_target = float(st.session_state.locked_trade['tp1']) if st.session_state.locked_trade else (calc_entry - 600.0 if calc_direction == 'SHORT' else calc_entry + 600.0)
+        calc_exit = st.number_input("Exit / Target / SL Price ($)", value=round(default_target, 1), step=10.0)
+        
+    # Math Calculations
+    position_size_usd = calc_margin * calc_leverage
+    btc_qty = position_size_usd / calc_entry if calc_entry > 0 else 0
+
+    if calc_direction == "LONG":
+        point_diff = calc_exit - calc_entry
+        est_liq = calc_entry * (1 - (1 / calc_leverage) + 0.005)
+    else:
+        point_diff = calc_entry - calc_exit
+        est_liq = calc_entry * (1 + (1 / calc_leverage) - 0.005)
+
+    net_pnl_usd = (point_diff / calc_entry) * position_size_usd if calc_entry > 0 else 0
+    roe_percentage = (net_pnl_usd / calc_margin) * 100 if calc_margin > 0 else 0
+
+    st.markdown("---")
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Total Position Size", f"${position_size_usd:,.0f}", f"{btc_qty:.4f} BTC")
+    
+    pnl_label = "Net Profit" if net_pnl_usd >= 0 else "Net Loss"
+    r2.metric(f"Estimated {pnl_label} ($)", f"${net_pnl_usd:+,.2f}", f"{point_diff:+.1f} Points")
+    
+    roe_color = "normal" if roe_percentage >= 0 else "inverse"
+    r3.metric("ROE (Profit/Loss % on Margin)", f"{roe_percentage:+.2f}%")
+    r4.metric("Estimated Liq. Price", f"${est_liq:,.1f}", "Be Cautious")
+
 # ----------------- AI CHATBOT -----------------
 st.subheader("🤖 Institutional AI Master Analyst")
 
@@ -256,7 +287,7 @@ for role, text in st.session_state.chat_history:
     with st.chat_message(role):
         st.write(text)
 
-user_query = st.chat_input("Poochiye (e.g. Abhi trade lu ya wait karu?, SL kahan lagau?)...")
+user_query = st.chat_input("Poochiye (e.g. SL kahan rakhu?, kya trade safe hai?, loss kitna hoga?)...")
 
 if user_query:
     st.session_state.chat_history.append(("user", user_query))
@@ -268,13 +299,15 @@ if user_query:
 
     if t is not None:
         pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
-        reply = f"🔒 Active {t['type']} Sniper Position: Fixed Entry ${t['entry']:,.1f} | Fixed SL ${t['sl']:,.1f}. Current PnL: {pts:+.0f} points. Panic me early exit na karein."
-    elif stoch_5m >= 85 and cci_5m > 120:
-        reply = f"🩸 Market Overheated: 5M StochRSI {stoch_5m:.0f} aur CCI {cci_5m:.0f} par hai. Top rejection short entry zone active hai."
-    elif stoch_5m <= 18 and cci_5m < -120:
-        reply = f"💎 Dip Buying Opportunity: 5M StochRSI {stoch_5m:.0f} oversold hai. Bounce ke liye Long entry favoured hai."
+        reply = (
+            f"🔒 Active {t['type']} Position Status @ ${live_price:,.1f}:\n"
+            f"• Entry: ${t['entry']:,.1f} | Hard SL: ${t['sl']:,.1f} | Current PnL: {pts:+.0f} points.\n"
+            f"• Note: Jab tak price SL (${t['sl']:,.1f}) ke upar close na ho, position valid hai. 15m/30m/1h indicators abhi bhi overbought exhaustion dikha rahe hain."
+        )
+    elif "calculator" in q or "pnl" in q:
+        reply = "🧮 Calculator widget upar live hai! Wahan aap margin amount, leverage slider aur target price daal kar exact Dollar aur % profit/loss calculate kar sakte hain."
     else:
-        reply = f"Live Market: BTC ${live_price:,.1f}. Abhi momentum transition me hai. Pehla clear extreme turn aate hi system trade freeze karega."
+        reply = f"Live Market: BTC ${live_price:,.1f}. Key levels monitor ho rahe hain. Extreme turning points par system early triggers de raha hai."
 
     st.session_state.chat_history.append(("assistant", reply))
     with st.chat_message("assistant"):

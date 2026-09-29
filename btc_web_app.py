@@ -319,7 +319,7 @@ if user_query:
 
     if t is not None:
         pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
-        reply = f"Active {t['type']} Sniper Position: Fixed Entry ${t['entry']:,.1f} \vert{} Fixed SL${t['sl']:,.1f}. Current PnL: {pts:+.0f} points. Panic me early exit na karein."
+        reply = "Active " + str(t['type']) + " Position: Entry $" + f"{t['entry']:,.1f}" + " \vert{} SL $" + f"{t['sl']:,.1f}" + ". PnL: " + f"{pts:+.0f}" + " pts."
     elif stoch_5m >= 85 and cci_5m > 120:
         reply = f"Market Overheated: 5M StochRSI {stoch_5m:.0f} aur CCI {cci_5m:.0f} par hai. Top rejection short entry zone active hai."
     elif stoch_5m <= 18 and cci_5m < -120:

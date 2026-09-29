@@ -5,6 +5,7 @@ import numpy as np
 import ta
 import time
 import requests
+from datetime import datetime
 
 st.set_page_config(
     page_title="BTC Institutional Terminal",
@@ -46,11 +47,11 @@ with st.sidebar:
     st.header("⚙️ Telegram Settings")
     st.info(f"Target Chat ID: {TELEGRAM_CHAT_ID}")
     if st.button("🔔 Send Test Telegram Alert"):
-        success = send_telegram("✅ *Telegram Alert Connected Successfully!*\n\nAapka BTC Institutional Terminal bilkul ready hai. Jab bhi market mein naya Setup trigger hoga, yahan instant notification aayega.")
+        success = send_telegram("✅ *Telegram Alert Connected Successfully!*\n\nAapka BTC Institutional Terminal ready hai. Result notifications yahan aayenge.")
         if success:
-            st.success("Test message bhej diya gaya hai! Apna Telegram app check karein.")
+            st.success("Test message sent! Check your Telegram.")
         else:
-            st.error("Message nahi gaya. Please check karein ki Streamlit Secrets mein TELEGRAM_BOT_TOKEN sahi dala hai ya nahi.")
+            st.error("Check TELEGRAM_BOT_TOKEN in Secrets.")
 
 SYMBOL = 'BTC/USDT'
 TIMEFRAMES = ['5m', '15m', '30m', '1h', '2h', '4h', '1d']
@@ -72,12 +73,15 @@ def get_exchange():
 
 exchange = get_exchange()
 
+# Persistent session states
 if 'locked_trade' not in st.session_state:
     st.session_state.locked_trade = None
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'tp1_alerted' not in st.session_state:
     st.session_state.tp1_alerted = False
+if 'trade_history' not in st.session_state:
+    st.session_state.trade_history = []
 
 def detect_candlestick_pattern(row, prev_row):
     o, h, l, c = row['open'], row['high'], row['low'], row['close']
@@ -179,37 +183,42 @@ if st.session_state.locked_trade is None:
     if early_short_cond:
         st.session_state.locked_trade = {
             'type': 'SHORT', 'entry': live_price, 'sl': live_price + 280.0,
-            'tp1': live_price - 600.0, 'tp2': live_price - 1500.0, 'tp3': live_price - 2500.0
+            'tp1': live_price - 600.0, 'tp2': live_price - 1500.0, 'tp3': live_price - 2500.0,
+            'time': datetime.now().strftime("%H:%M:%S")
         }
         st.session_state.tp1_alerted = False
         msg = (
-            f"🚨 *BTC SNIPER SHORT TRIGGERED!*\n\n"
-            f"• *Entry Rate:* `${live_price:,.1f}`\n"
+            f"🚨 *NEW BTC TRADE TRIGGERED!*\n\n"
+            f"⚡ *Type:* SHORT POSITION\n"
+            f"• *Entry:* `${live_price:,.1f}`\n"
             f"• *Hard SL:* `${live_price + 280.0:,.1f}` (+280 pts risk)\n"
             f"• *Target 1:* `${live_price - 600.0:,.1f}` (+600 pts)\n"
             f"• *Target 2:* `${live_price - 1500.0:,.1f}` (+1,500 pts)\n"
             f"• *Target 3:* `${live_price - 2500.0:,.1f}` (+2,500 pts)\n\n"
-            f"⚡ *Signal:* 15m StochRSI {stoch_15m:.0f} Peak Exhaustion."
+            f"📊 *Confluence:* 15m StochRSI {stoch_15m:.0f} Peak Exhaustion."
         )
         send_telegram(msg)
 
     elif early_long_cond:
         st.session_state.locked_trade = {
             'type': 'LONG', 'entry': live_price, 'sl': live_price - 280.0,
-            'tp1': live_price + 600.0, 'tp2': live_price + 1500.0, 'tp3': live_price + 2500.0
+            'tp1': live_price + 600.0, 'tp2': live_price + 1500.0, 'tp3': live_price + 2500.0,
+            'time': datetime.now().strftime("%H:%M:%S")
         }
         st.session_state.tp1_alerted = False
         msg = (
-            f"🚀 *BTC SNIPER LONG TRIGGERED!*\n\n"
-            f"• *Entry Rate:* `${live_price:,.1f}`\n"
+            f"🚀 *NEW BTC TRADE TRIGGERED!*\n\n"
+            f"⚡ *Type:* LONG POSITION\n"
+            f"• *Entry:* `${live_price:,.1f}`\n"
             f"• *Hard SL:* `${live_price - 280.0:,.1f}` (-280 pts risk)\n"
             f"• *Target 1:* `${live_price + 600.0:,.1f}` (+600 pts)\n"
             f"• *Target 2:* `${live_price + 1500.0:,.1f}` (+1,500 pts)\n"
             f"• *Target 3:* `${live_price + 2500.0:,.1f}` (+2,500 pts)\n\n"
-            f"⚡ *Signal:* 15m StochRSI {stoch_15m:.0f} Deep Oversold Bounce."
+            f"📊 *Confluence:* 15m StochRSI {stoch_15m:.0f} Oversold Bounce."
         )
         send_telegram(msg)
 
+# Master Action Card & Outcomes
 if st.session_state.locked_trade is not None:
     t = st.session_state.locked_trade
     pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
@@ -219,17 +228,59 @@ if st.session_state.locked_trade is not None:
     hit_tp2 = (live_price >= t['tp2']) if t['type'] == 'LONG' else (live_price <= t['tp2'])
 
     if hit_tp1 and not st.session_state.tp1_alerted:
-        send_telegram(f"🎯 *TARGET 1 HIT! (+600 PTS)*\nBTC Rate: `${live_price:,.1f}`\nAction: Stop-Loss ko entry price (`${t['entry']:,.1f}`) par lock karein (Zero-Risk Trade).")
+        send_telegram(
+            f"🎯 *TARGET 1 REACHED (+600 PTS)*\n\n"
+            f"• *Trade:* {t['type']}\n"
+            f"• *Current Rate:* `${live_price:,.1f}`\n"
+            f"• *Profit:* +600 points\n"
+            f"• *Action:* Stop-Loss ko utha kar Entry (`${t['entry']:,.1f}`) par shift karein (Zero-Risk Active)."
+        )
         st.session_state.tp1_alerted = True
 
     if hit_sl:
-        st.error(f"🔴 {t['type']} TRADE STOP-LOSS HIT (-{abs(pts):.0f} pts). Exited @ ${live_price:,.1f}.")
-        send_telegram(f"❌ *STOP-LOSS HIT (-{abs(pts):.0f} pts)*\nClosed @ `${live_price:,.1f}`.")
+        st.error(f"🔴 STOP-LOSS HIT in {t['type']} Trade (-{abs(pts):.0f} pts). Exited @ ${live_price:,.1f}.")
+        send_telegram(
+            f"❌ *STOP-LOSS HIT IN THIS TRADE*\n\n"
+            f"• *Trade:* {t['type']}\n"
+            f"• *Entry:* `${t['entry']:,.1f}`\n"
+            f"• *Exit:* `${live_price:,.1f}`\n"
+            f"• *PnL:* -{abs(pts):.0f} Points\n"
+            f"• *Trade Rating:* ⭐ 1/5 (Risk Managed at defined SL)\n"
+            f"• *Next Step:* System is scanning for next high-conviction setup."
+        )
+        st.session_state.trade_history.insert(0, {
+            "Time": t.get('time', '--'),
+            "Type": t['type'],
+            "Entry": f"${t['entry']:,.1f}",
+            "Exit": f"${live_price:,.1f}",
+            "PnL": f"-{abs(pts):.0f} pts",
+            "Result": "❌ LOSS (SL HIT)",
+            "Rating": "⭐ 1/5"
+        })
         st.session_state.locked_trade = None
+
     elif hit_tp2:
-        st.success(f"🟢 {t['type']} TARGET 2 HIT (+{pts:.0f} pts PROFIT BOOKED!). Position closed.")
-        send_telegram(f"💰 *TARGET 2 HIT (+1,500 PTS PROFIT BOOKED!)*\nExited @ `${live_price:,.1f}`.")
+        st.success(f"🟢 TARGET 2 HIT in {t['type']} Trade (+{pts:.0f} pts PROFIT BOOKED!). Position closed.")
+        send_telegram(
+            f"💰 *PROFIT TARGET 2 HIT IN THIS TRADE!*\n\n"
+            f"• *Trade:* {t['type']}\n"
+            f"• *Entry:* `${t['entry']:,.1f}`\n"
+            f"• *Exit:* `${live_price:,.1f}`\n"
+            f"• *Net Profit:* +{pts:.0f} Points captured\n"
+            f"• *Trade Rating:* ⭐⭐⭐⭐⭐ 5/5 (Master Setup Victory!)\n"
+            f"• *Status:* Position closed with solid profit."
+        )
+        st.session_state.trade_history.insert(0, {
+            "Time": t.get('time', '--'),
+            "Type": t['type'],
+            "Entry": f"${t['entry']:,.1f}",
+            "Exit": f"${live_price:,.1f}",
+            "PnL": f"+{pts:.0f} pts",
+            "Result": "🟢 PROFIT (TP2 HIT)",
+            "Rating": "⭐⭐⭐⭐⭐ 5/5"
+        })
         st.session_state.locked_trade = None
+
     else:
         css_class = "trade-short" if t['type'] == 'SHORT' else "trade-long"
         st.markdown(f"""
@@ -251,7 +302,7 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-# ----------------- TABLE -----------------
+# ----------------- TABLE (ALL 12 INDICATORS LIVE) -----------------
 st.subheader("📊 Multi-Timeframe Matrix (All 12 Indicators Live)")
 
 table_rows = []
@@ -300,6 +351,13 @@ for tf in TIMEFRAMES:
 if table_rows:
     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
+# ----------------- RECENT CLOSED TRADES LOG & RATINGS -----------------
+st.subheader("📜 Closed Trades Performance Journal")
+if st.session_state.trade_history:
+    st.dataframe(pd.DataFrame(st.session_state.trade_history), use_container_width=True, hide_index=True)
+else:
+    st.info("Pehli trade close hone par uski Entry, Exit, PnL aur Star Rating yahan record ho jayegi.")
+
 # ----------------- AI CHATBOT -----------------
 st.subheader("🤖 Institutional AI Master Analyst")
 
@@ -307,7 +365,7 @@ for role, text in st.session_state.chat_history:
     with st.chat_message(role):
         st.write(text)
 
-user_query = st.chat_input("Poochiye (e.g. Abhi trade lu ya wait karu?, SL kahan lagau?)...")
+user_query = st.chat_input("Poochiye (e.g. Current trade ka performance kaisa hai?, SL kahan shift karu?)...")
 
 if user_query:
     st.session_state.chat_history.append(("user", user_query))
@@ -325,7 +383,7 @@ if user_query:
     elif stoch_5m <= 18 and cci_5m < -120:
         reply = f"Dip Buying Opportunity: 5M StochRSI {stoch_5m:.0f} oversold hai. Bounce ke liye Long entry favoured hai."
     else:
-        reply = f"Live Market: BTC ${live_price:,.1f}. Momentum scanning chal raha hai. Turning point par Telegram par instant notification aayega."
+        reply = f"Live Market: BTC ${live_price:,.1f}. Momentum scanning chal raha hai. Trade outcome par Telegram par instant notification aayega."
 
     st.session_state.chat_history.append(("assistant", reply))
     with st.chat_message("assistant"):

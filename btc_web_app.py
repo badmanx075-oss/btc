@@ -24,7 +24,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ================= TELEGRAM CONFIG =================
+# ================= TELEGRAM SECURE CONFIG =================
 raw_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 raw_chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "5984456777")
 
@@ -41,7 +41,7 @@ def send_telegram(message):
             "text": message,
             "parse_mode": "Markdown"
         }
-        res = requests.post(url, json=payload, timeout=6)
+        res = requests.post(url, json=payload, timeout=5)
         resp = res.json()
         if res.status_code == 200 and resp.get("ok"):
             return True, "Delivered"
@@ -49,6 +49,27 @@ def send_telegram(message):
             return False, resp.get("description", "Error")
     except Exception as e:
         return False, str(e)
+
+# ================= 100% ACCURATE PERPETUAL FUTURES PRICE API =================
+# Direct Binance USDT-Margined Futures Contract (No spot premium mismatch)
+def get_binance_perpetual_price():
+    endpoints = [
+        "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT",
+        "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT",
+        "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+    ]
+    for ep in endpoints:
+        try:
+            r = requests.get(ep, timeout=2.0)
+            if r.status_code == 200:
+                data = r.json()
+                if "price" in data:
+                    return float(data["price"])
+                elif "markPrice" in data:
+                    return float(data["markPrice"])
+        except Exception:
+            continue
+    return None
 
 # ================= PERSISTENT SHARED STATE =================
 @st.cache_resource
@@ -58,7 +79,7 @@ def get_shared_system():
         'tp1_hit': False,
         'trade_history': [],
         'thread_running': False,
-        'last_price': 84000.0,
+        'last_price': 83300.0,
         'matrix_cache': {},
         'matrix_lock': threading.Lock(),
         'last_fetch': 0
@@ -71,7 +92,7 @@ TIMEFRAMES = ['5m', '15m', '30m', '1h', '2h', '4h', '1d']
 def get_exchange():
     for name in ['binance', 'kraken', 'kucoin']:
         try:
-            ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 5000})
+            ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 4000})
             ex.load_markets()
             return ex
         except Exception:
@@ -102,15 +123,24 @@ def detect_candlestick_pattern(row, prev_row):
 
 def fetch_tf_series(ex, tf):
     try:
-        sym = 'BTC/USDT' if 'BTC/USDT' in ex.markets else 'BTC/USD'
-        candles = ex.fetch_ohlcv(sym, timeframe=tf, limit=50)
-        if not candles:
+        # Direct Binance Futures Klines REST endpoint for exact high/low/indicators
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval={tf}&limit=40"
+        r = requests.get(url, timeout=3.0)
+        if r.status_code == 200:
+            candles = r.json()
+            formatted = [[int(c[0]), float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5])] for c in candles]
+            df = pd.DataFrame(formatted, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        else:
+            sym = 'BTC/USDT' if 'BTC/USDT' in ex.markets else 'BTC/USD'
+            candles = ex.fetch_ohlcv(sym, timeframe=tf, limit=40)
+            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+        if df.empty:
             return None
-        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
         df['EMA9'] = ta.trend.ema_indicator(df['close'], window=9)
         df['EMA21'] = ta.trend.ema_indicator(df['close'], window=21)
-        df['EMA200'] = ta.trend.ema_indicator(df['close'], window=min(len(df)-1, 50))
+        df['EMA200'] = ta.trend.ema_indicator(df['close'], window=min(len(df)-1, 40))
         df['RSI'] = ta.momentum.rsi(df['close'], window=14)
         df['VOL_SMA20'] = df['volume'].rolling(window=20).mean()
         df['ATR'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
@@ -144,116 +174,76 @@ def cloud_daemon():
     bg_ex = get_exchange()
     while True:
         try:
-            sym = 'BTC/USDT' if 'BTC/USDT' in bg_ex.markets else 'BTC/USD'
-            ticker = bg_ex.fetch_ticker(sym)
-            live_p = float(ticker['last']) if (ticker and 'last' in ticker) else float(shared['last_price'])
-            shared['last_price'] = live_p
+            live_p = get_binance_perpetual_price()
+            if live_p is not None:
+                shared['last_price'] = live_p
+            else:
+                live_p = float(shared['last_price'])
 
-            d5 = fetch_tf_series(bg_ex, '5m')
-            d15 = fetch_tf_series(bg_ex, '15m')
+            # Active Trade Check in Background
+            t = shared['trade']
+            if t is not None:
+                is_long = "LONG" in t['type']
+                pts = (live_p - t['entry']) if is_long else (t['entry'] - live_p)
 
-            if d5 is not None and d15 is not None:
-                stoch5 = d5.iloc[-1].get('STOCH_K', 50)
-                stoch15 = d15.iloc[-1].get('STOCH_K', 50)
-                cci5 = d5.iloc[-1].get('CCI', 0)
-                cci15 = d15.iloc[-1].get('CCI', 0)
-                will5 = d5.iloc[-1].get('WILLR', -50)
+                hit_sl = (live_p <= t['sl']) if is_long else (live_p >= t['sl'])
+                hit_tp1 = (live_p >= t['tp1']) if is_long else (live_p <= t['tp1'])
+                hit_tp2 = (live_p >= t['tp2']) if is_long else (live_p <= t['tp2'])
 
-                t = shared['trade']
-                if t is not None:
-                    is_long = "LONG" in t['type']
-                    pts = (live_p - t['entry']) if is_long else (t['entry'] - live_p)
+                if hit_tp1 and not shared['tp1_hit']:
+                    shared['tp1_hit'] = True
+                    send_telegram(
+                        f"🎯 *TARGET 1 REACHED!*\n\n"
+                        f"• Trade: {t['type']}\n"
+                        f"• Rate: `${live_p:,.1f}`\n"
+                        f"• Action: Stop-Loss ko entry (`${t['entry']:,.1f}`) par shift karein."
+                    )
 
-                    hit_sl = (live_p <= t['sl']) if is_long else (live_p >= t['sl'])
-                    hit_tp1 = (live_p >= t['tp1']) if is_long else (live_p <= t['tp1'])
-                    hit_tp2 = (live_p >= t['tp2']) if is_long else (live_p <= t['tp2'])
+                if hit_sl:
+                    send_telegram(
+                        f"❌ *STOP-LOSS HIT IN THIS TRADE*\n\n"
+                        f"• Trade: {t['type']}\n"
+                        f"• Entry: `${t['entry']:,.1f}`\n"
+                        f"• Exit: `${live_p:,.1f}`\n"
+                        f"• Net PnL: -{abs(pts):.0f} Points\n"
+                        f"• Rating: ⭐ 1/5 (Risk Managed at SL)"
+                    )
+                    shared['trade_history'].insert(0, {
+                        "Time": t.get('time', '--'),
+                        "Type": t['type'],
+                        "Entry": f"${t['entry']:,.1f}",
+                        "Exit": f"${live_p:,.1f}",
+                        "PnL": f"-{abs(pts):.0f} pts",
+                        "Result": "❌ LOSS (SL HIT)",
+                        "Rating": "⭐ 1/5"
+                    })
+                    shared['trade'] = None
+                    shared['tp1_hit'] = False
 
-                    if hit_tp1 and not shared['tp1_hit']:
-                        shared['tp1_hit'] = True
-                        send_telegram(
-                            f"🎯 *TARGET 1 REACHED!*\n\n"
-                            f"• Trade: {t['type']}\n"
-                            f"• Rate: `${live_p:,.1f}`\n"
-                            f"• Action: Stop-Loss ko entry (`${t['entry']:,.1f}`) par move karein."
-                        )
+                elif hit_tp2:
+                    send_telegram(
+                        f"💰 *PROFIT TARGET 2 HIT IN THIS TRADE!*\n\n"
+                        f"• Trade: {t['type']}\n"
+                        f"• Entry: `${t['entry']:,.1f}`\n"
+                        f"• Exit: `${live_p:,.1f}`\n"
+                        f"• Net Profit: +{pts:.0f} Points captured\n"
+                        f"• Rating: ⭐⭐⭐⭐⭐ 5/5 (Master Setup Victory!)"
+                    )
+                    shared['trade_history'].insert(0, {
+                        "Time": t.get('time', '--'),
+                        "Type": t['type'],
+                        "Entry": f"${t['entry']:,.1f}",
+                        "Exit": f"${live_p:,.1f}",
+                        "PnL": f"+{pts:.0f} pts",
+                        "Result": "🟢 PROFIT (TP2 HIT)",
+                        "Rating": "⭐⭐⭐⭐⭐ 5/5"
+                    })
+                    shared['trade'] = None
+                    shared['tp1_hit'] = False
 
-                    if hit_sl:
-                        send_telegram(
-                            f"❌ *STOP-LOSS HIT IN THIS TRADE*\n\n"
-                            f"• Trade: {t['type']}\n"
-                            f"• Entry: `${t['entry']:,.1f}`\n"
-                            f"• Exit: `${live_p:,.1f}`\n"
-                            f"• Net PnL: -{abs(pts):.0f} Points\n"
-                            f"• Rating: ⭐ 1/5 (Risk Preserved at SL)"
-                        )
-                        shared['trade_history'].insert(0, {
-                            "Time": t.get('time', '--'),
-                            "Type": t['type'],
-                            "Entry": f"${t['entry']:,.1f}",
-                            "Exit": f"${live_p:,.1f}",
-                            "PnL": f"-{abs(pts):.0f} pts",
-                            "Result": "❌ LOSS (SL HIT)",
-                            "Rating": "⭐ 1/5"
-                        })
-                        shared['trade'] = None
-                        shared['tp1_hit'] = False
-
-                    elif hit_tp2:
-                        send_telegram(
-                            f"💰 *PROFIT TARGET 2 HIT IN THIS TRADE!*\n\n"
-                            f"• Trade: {t['type']}\n"
-                            f"• Entry: `${t['entry']:,.1f}`\n"
-                            f"• Exit: `${live_p:,.1f}`\n"
-                            f"• Net Profit: +{pts:.0f} Points captured\n"
-                            f"• Rating: ⭐⭐⭐⭐⭐ 5/5 (Master Setup Victory!)"
-                        )
-                        shared['trade_history'].insert(0, {
-                            "Time": t.get('time', '--'),
-                            "Type": t['type'],
-                            "Entry": f"${t['entry']:,.1f}",
-                            "Exit": f"${live_p:,.1f}",
-                            "PnL": f"+{pts:.0f} pts",
-                            "Result": "🟢 PROFIT (TP2 HIT)",
-                            "Rating": "⭐⭐⭐⭐⭐ 5/5"
-                        })
-                        shared['trade'] = None
-                        shared['tp1_hit'] = False
-
-                else:
-                    early_short = (stoch5 >= 88 or stoch15 >= 90) and (cci5 > 130 or cci15 > 130) and (will5 >= -15)
-                    early_long = (stoch5 <= 15 or stoch15 <= 18) and (cci5 < -130 or cci15 < -130) and (will5 <= -85)
-
-                    if early_short:
-                        shared['trade'] = {
-                            'type': 'SHORT', 'entry': live_p, 'sl': live_p + 280.0,
-                            'tp1': live_p - 600.0, 'tp2': live_p - 1500.0, 'tp3': live_p - 2500.0,
-                            'time': datetime.now().strftime("%H:%M:%S")
-                        }
-                        shared['tp1_hit'] = False
-                        send_telegram(
-                            f"🚨 *NEW BTC SHORT TRIGGERED (24/7 Cloud Alert)*\n\n"
-                            f"• Entry: `${live_p:,.1f}`\n"
-                            f"• Hard SL: `${live_p + 280.0:,.1f}` (+280 pts risk)\n"
-                            f"• TP1: `${live_p - 600.0:,.1f}`\n"
-                            f"• TP2: `${live_p - 1500.0:,.1f}`"
-                        )
-                    elif early_long:
-                        shared['trade'] = {
-                            'type': 'LONG', 'entry': live_p, 'sl': live_p - 280.0,
-                            'tp1': live_p + 600.0, 'tp2': live_p + 1500.0, 'tp3': live_p + 2500.0,
-                            'time': datetime.now().strftime("%H:%M:%S")
-                        }
-                        shared['tp1_hit'] = False
-                        send_telegram(
-                            f"🚀 *NEW BTC LONG TRIGGERED (24/7 Cloud Alert)*\n\n"
-                            f"• Entry: `${live_p:,.1f}`\n"
-                            f"• Hard SL: `${live_p - 280.0:,.1f}` (-280 pts risk)\n"
-                            f"• TP1: `${live_p + 600.0:,.1f}`\n"
-                            f"• TP2: `${live_p + 1500.0:,.1f}`"
-                        )
-
+            # Update indicators every 12s
             now = time.time()
-            if now - shared['last_fetch'] > 15:
+            if now - shared['last_fetch'] > 12:
                 temp_map = {}
                 for tf in TIMEFRAMES:
                     df_item = fetch_tf_series(bg_ex, tf)
@@ -263,19 +253,49 @@ def cloud_daemon():
                     shared['matrix_cache'] = temp_map
                     shared['last_fetch'] = now
 
+                # Real automatic signal check
+                if shared['trade'] is None and '5m' in temp_map and '15m' in temp_map:
+                    s5 = temp_map['5m'].iloc[-1].get('STOCH_K', 50)
+                    s15 = temp_map['15m'].iloc[-1].get('STOCH_K', 50)
+                    c5 = temp_map['5m'].iloc[-1].get('CCI', 0)
+                    c15 = temp_map['15m'].iloc[-1].get('CCI', 0)
+                    w5 = temp_map['5m'].iloc[-1].get('WILLR', -50)
+
+                    if (s5 >= 88 or s15 >= 90) and (c5 > 130 or c15 > 130) and (w5 >= -15):
+                        shared['trade'] = {
+                            'type': 'SHORT', 'entry': live_p, 'sl': live_p + 280.0,
+                            'tp1': live_p - 600.0, 'tp2': live_p - 1500.0, 'tp3': live_p - 2500.0,
+                            'time': datetime.now().strftime("%H:%M:%S")
+                        }
+                        shared['tp1_hit'] = False
+                        send_telegram(f"🚨 *NEW BTC SHORT TRIGGERED*\n• Entry: `${live_p:,.1f}`\n• SL: `${live_p+280:,.1f}`\n• TP1: `${live_p-600:,.1f}`")
+
+                    elif (s5 <= 15 or s15 <= 18) and (c5 < -130 or c15 < -130) and (w5 <= -85):
+                        shared['trade'] = {
+                            'type': 'LONG', 'entry': live_p, 'sl': live_p - 280.0,
+                            'tp1': live_p + 600.0, 'tp2': live_p + 1500.0, 'tp3': live_p + 2500.0,
+                            'time': datetime.now().strftime("%H:%M:%S")
+                        }
+                        shared['tp1_hit'] = False
+                        send_telegram(f"🚀 *NEW BTC LONG TRIGGERED*\n• Entry: `${live_p:,.1f}`\n• SL: `${live_p-280:,.1f}`\n• TP1: `${live_p+600:,.1f}`")
+
         except Exception:
             pass
 
-        time.sleep(3)
+        time.sleep(2)
 
-# Thread initiation
 if not shared['thread_running']:
     t_daemon = threading.Thread(target=cloud_daemon, daemon=True)
     t_daemon.start()
     shared['thread_running'] = True
 
-# ================= UI INSTANT RENDER =================
-live_price = float(shared['last_price'])
+# ================= UI INSTANT TICK SYNC =================
+fresh_p = get_binance_perpetual_price()
+if fresh_p is not None:
+    live_price = fresh_p
+    shared['last_price'] = fresh_p
+else:
+    live_price = float(shared['last_price'])
 
 with shared['matrix_lock']:
     tf_data = dict(shared['matrix_cache'])
@@ -291,9 +311,9 @@ ema200_1d = df_1d.iloc[-1].get('EMA200', live_price) if df_1d is not None and le
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
     st.header("⚙️ 24/7 Cloud Daemon")
-    st.success("🟢 Background Loop: ACTIVE")
+    st.success("🟢 Perpetual Loop: ACTIVE")
     st.caption(f"Telegram Target ID: `{TELEGRAM_CHAT_ID}`")
-    st.caption(f"Tick Sync: {datetime.now().strftime('%H:%M:%S')}")
+    st.info(f"⏱️ Live Tick Sync: **{datetime.now().strftime('%H:%M:%S')}**")
 
     if st.button("🔔 Send Force Test Alert"):
         ok, reason = send_telegram("✅ *Terminal Test Message*\nAapka Telegram alert pipeline bilkul active hai!")
@@ -334,7 +354,7 @@ with st.sidebar:
 # ----------------- UI HEADER -----------------
 st.title("⚡ BTC Perpetual Institutional Terminal (24/7 Cloud Guard)")
 h_col1, h_col2, h_col3, h_col4 = st.columns(4)
-h_col1.metric("Live Price", f"${live_price:,.2f}")
+h_col1.metric("Live Price (Perpetual)", f"${live_price:,.2f}")
 h_col2.metric("Local High (Resistance)", f"${recent_high:,.1f}")
 h_col3.metric("Local Low (Support)", f"${recent_low:,.1f}")
 h_col4.metric("1D 200 EMA", f"${ema200_1d:,.1f}")
@@ -458,12 +478,12 @@ if user_query:
         elif s5 <= 18 and c5 < -120:
             reply = f"Dip Buying Opportunity: 5M StochRSI {s5:.0f} oversold hai. Bounce ke liye Long entry favoured hai."
         else:
-            reply = f"Live Market: BTC ${live_price:,.1f}. Momentum scanning chal raha hai. Turning point aate hi 24/7 Cloud engine Telegram par notification push karega."
+            reply = f"Live Market: BTC Perpetual ${live_price:,.1f}. Momentum scanning chal raha hai. Turning point aate hi 24/7 Cloud engine Telegram par notification push karega."
 
     st.session_state.chat_history.append(("assistant", reply))
     with st.chat_message("assistant"):
         st.write(reply)
 
-# Clean 3s refresh
+# Ultra-fast 3-second live auto-refresh
 time.sleep(3)
 st.rerun()

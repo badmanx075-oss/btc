@@ -24,13 +24,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# IST Indian Standard Timezone helper
+# IST Indian Standard Timezone
 IST = timezone(timedelta(hours=5, minutes=30))
 
 def get_ist_time():
     return datetime.now(IST).strftime("%I:%M:%S %p")
 
-# ================= TELEGRAM CONFIG =================
+# ================= TELEGRAM SECURE CONFIG =================
 raw_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 raw_chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "5984456777")
 
@@ -47,7 +47,7 @@ def send_telegram(message):
             "text": message,
             "parse_mode": "Markdown"
         }
-        res = requests.post(url, json=payload, timeout=5)
+        res = requests.post(url, json=payload, timeout=4)
         resp = res.json()
         if res.status_code == 200 and resp.get("ok"):
             return True, "Delivered"
@@ -56,12 +56,11 @@ def send_telegram(message):
     except Exception as e:
         return False, str(e)
 
-# ================= BULLETPROOF CLOUD PRICE API (NO BAN / NO FREEZE) =================
-# Coinbase aur Bybit REST endpoints jo cloud datacenters par kabhi block nahi hote
+# ================= ULTRA-FAST 1-SEC PRICE API =================
 def get_live_crypto_price():
-    # 1. Bybit Linear Perpetual Futures
+    # 1. Bybit Perpetual Linear Fast API
     try:
-        r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT", timeout=2.5)
+        r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT", timeout=1.2)
         if r.status_code == 200:
             d = r.json()
             list_res = d.get("result", {}).get("list", [])
@@ -70,27 +69,28 @@ def get_live_crypto_price():
     except Exception:
         pass
 
-    # 2. Coinbase Spot / Perpetual Benchmark
+    # 2. Coinbase Pro Live Price
     try:
-        r = requests.get("https://api.coinbase.com/v2/prices/BTC-USD/spot", timeout=2.0)
+        r = requests.get("https://api.coinbase.com/v2/prices/BTC-USD/spot", timeout=1.2)
         if r.status_code == 200:
             d = r.json()
             return float(d["data"]["amount"])
     except Exception:
         pass
 
-    # 3. Kraken Futures / Spot Fallback
+    # 3. Binance Futures Fast Mirror
     try:
-        r = requests.get("https://api.kraken.com/0/public/Ticker?pair=XBTUSD", timeout=2.0)
+        r = requests.get("https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT", timeout=1.2)
         if r.status_code == 200:
             d = r.json()
-            return float(d["result"]["XXBTZUSD"]["c"][0])
+            if "price" in d:
+                return float(d["price"])
     except Exception:
         pass
 
     return None
 
-# ================= PERSISTENT SHARED MEMORY =================
+# ================= PERSISTENT SHARED STATE =================
 @st.cache_resource
 def get_shared_system():
     init_p = get_live_crypto_price() or 84000.0
@@ -112,7 +112,7 @@ TIMEFRAMES = ['5m', '15m', '30m', '1h', '2h', '4h', '1d']
 def get_exchange():
     for name in ['kraken', 'kucoin', 'bybit']:
         try:
-            ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 5000})
+            ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 4000})
             ex.load_markets()
             return ex
         except Exception:
@@ -143,15 +143,13 @@ def detect_candlestick_pattern(row, prev_row):
 
 def fetch_tf_series(ex, tf):
     try:
-        # Bybit klines (Works reliably on all cloud servers)
         bybit_tf_map = {'5m': '5', '15m': '15', '30m': '30', '1h': '60', '2h': '120', '4h': '240', '1d': 'D'}
         interval = bybit_tf_map.get(tf, '5')
         url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval={interval}&limit=40"
-        r = requests.get(url, timeout=3.0)
+        r = requests.get(url, timeout=2.5)
         if r.status_code == 200:
             raw = r.json().get("result", {}).get("list", [])
             if raw:
-                # Bybit returns newest first, reverse to oldest first
                 raw.reverse()
                 formatted = [[int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5])] for x in raw]
                 df = pd.DataFrame(formatted, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -207,7 +205,7 @@ def cloud_daemon():
             else:
                 live_p = float(shared['last_price'])
 
-            # Background trade exit checks
+            # Active Trade Check
             t = shared['trade']
             if t is not None:
                 is_long = "LONG" in t['type']
@@ -268,9 +266,9 @@ def cloud_daemon():
                     shared['trade'] = None
                     shared['tp1_hit'] = False
 
-            # Update indicators matrix in background
+            # Update indicators every 10 seconds in background
             now = time.time()
-            if now - shared['last_fetch'] > 12:
+            if now - shared['last_fetch'] > 10:
                 temp_map = {}
                 for tf in TIMEFRAMES:
                     df_item = fetch_tf_series(bg_ex, tf)
@@ -309,14 +307,14 @@ def cloud_daemon():
         except Exception:
             pass
 
-        time.sleep(2)
+        time.sleep(1)
 
 if not shared['thread_running']:
     t_daemon = threading.Thread(target=cloud_daemon, daemon=True)
     t_daemon.start()
     shared['thread_running'] = True
 
-# ================= UI INSTANT TICK SYNC =================
+# ================= 1-SEC INSTANT PRICE FETCH =================
 fresh_p = get_live_crypto_price()
 if fresh_p is not None:
     live_price = fresh_p
@@ -338,9 +336,9 @@ ema200_1d = df_1d.iloc[-1].get('EMA200', live_price) if df_1d is not None and le
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
     st.header("⚙️ 24/7 Cloud Daemon")
-    st.success("🟢 Perpetual Loop: ACTIVE")
+    st.success("🟢 Perpetual Loop: ACTIVE (1s Tick)")
     st.caption(f"Telegram Target ID: `{TELEGRAM_CHAT_ID}`")
-    st.info(f"⏱️ IST Sync: **{get_ist_time()}**")
+    st.info(f"⏱️ Live IST: **{get_ist_time()}**")
 
     if st.button("🔔 Send Force Test Alert"):
         ok, reason = send_telegram("✅ *Terminal Test Message*\nAapka Telegram alert pipeline bilkul active hai!")
@@ -511,6 +509,6 @@ if user_query:
     with st.chat_message("assistant"):
         st.write(reply)
 
-# Clean 3s auto-refresh
-time.sleep(3)
+# EXACT 1-SECOND TICK REFRESH
+time.sleep(1)
 st.rerun()

@@ -23,8 +23,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ================= TELEGRAM SECURE ENGINE (BULLETPROOF FIX) =================
-# Secrets se string format mein nikalna zaroori hai
+# ================= TELEGRAM ENGINE =================
 raw_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 raw_chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "5984456777")
 
@@ -49,19 +48,6 @@ def send_telegram(message):
             return False, f"Telegram API Error: {resp_json.get('description', 'Unknown')}"
     except Exception as e:
         return False, str(e)
-
-# Sidebar with Real-Time Diagnostics
-with st.sidebar:
-    st.header("⚙️ Telegram Diagnostics")
-    st.caption(f"Target Chat: `{TELEGRAM_CHAT_ID}`")
-    
-    if st.button("🔔 Send Force Test Alert"):
-        ok, reason = send_telegram("✅ *Terminal Test Message*\nAapka Telegram alert bilkul live aur operational hai!")
-        if ok:
-            st.success("Test alert send ho gaya! Telegram check karein.")
-        else:
-            st.error(f"Failed: {reason}")
-            st.info("Ensure karein ki aapne Telegram par apne Bot ko pehle `/start` kiya hai.")
 
 SYMBOL = 'BTC/USDT'
 TIMEFRAMES = ['5m', '15m', '30m', '1h', '2h', '4h', '1d']
@@ -171,6 +157,42 @@ recent_low = min(df_5m['low'].iloc[-20:].min() if df_5m is not None else live_pr
 df_1d = tf_data.get('1d')
 ema200_1d = df_1d.iloc[-1].get('EMA200', live_price) if df_1d is not None and len(df_1d) >= 1 else live_price
 
+# ----------------- SIDEBAR WITH TESTING CONTROLS -----------------
+with st.sidebar:
+    st.header("⚙️ Telegram Diagnostics")
+    st.caption(f"Target Chat: `{TELEGRAM_CHAT_ID}`")
+    
+    if st.button("🔔 Send Force Test Alert"):
+        ok, reason = send_telegram("✅ *Terminal Test Message*\nAapka Telegram alert bilkul operational hai!")
+        if ok:
+            st.success("Test alert send ho gaya!")
+        else:
+            st.error(f"Failed: {reason}")
+            
+    st.divider()
+    st.subheader("🧪 Live Auto-Trigger Tester")
+    st.caption("Yeh button dabane par 1 dummy trade lock hogi aur BTC price thodi si bhi hilte hi TP1, TP2 ya SL ka automatic notification Telegram par bhejegi.")
+    
+    if st.button("🚀 Trigger Instant Dummy Trade"):
+        st.session_state.locked_trade = {
+            'type': 'LONG (TEST)',
+            'entry': live_price,
+            'sl': live_price - 8.0,    # Sirf 8 points risk
+            'tp1': live_price + 8.0,   # Sirf 8 points TP1
+            'tp2': live_price + 15.0,  # 15 points TP2
+            'time': datetime.now().strftime("%H:%M:%S")
+        }
+        st.session_state.tp1_hit = False
+        send_telegram(
+            f"🧪 *[TEST TRADE TRIGGERED!]*\n\n"
+            f"• *Type:* LONG (SIMULATION)\n"
+            f"• *Entry:* `${live_price:,.1f}`\n"
+            f"• *Test SL:* `${live_price - 8.0:,.1f}`\n"
+            f"• *Test TP1:* `${live_price + 8.0:,.1f}`\n\n"
+            f"⚡ Testing Auto Alert Pipeline..."
+        )
+        st.success("Dummy trade lock ho gayi! Agle 10-30 seconds mein automatic result message Telegram par aayega.")
+
 # ----------------- UI HEADER -----------------
 st.title("⚡ BTC Perpetual Institutional Terminal (Telegram Integrated)")
 h_col1, h_col2, h_col3, h_col4 = st.columns(4)
@@ -179,7 +201,7 @@ h_col2.metric("Local High (Resistance)", f"${recent_high:,.1f}")
 h_col3.metric("Local Low (Support)", f"${recent_low:,.1f}")
 h_col4.metric("1D 200 EMA", f"${ema200_1d:,.1f}")
 
-# ----------------- TRIGGER ENGINE -----------------
+# ----------------- REAL-TIME TRIGGER ENGINE -----------------
 stoch_5m = df_5m.iloc[-1].get('STOCH_K', 50) if df_5m is not None else 50
 stoch_15m = df_15m.iloc[-1].get('STOCH_K', 50) if df_15m is not None else 50
 cci_5m = df_5m.iloc[-1].get('CCI', 0) if df_5m is not None else 0
@@ -189,7 +211,7 @@ will_5m = df_5m.iloc[-1].get('WILLR', -50) if df_5m is not None else -50
 early_short_cond = (stoch_5m >= 88 or stoch_15m >= 90) and (cci_5m > 130 or cci_15m > 130) and (will_5m >= -15)
 early_long_cond = (stoch_5m <= 15 or stoch_15m <= 18) and (cci_5m < -130 or cci_15m < -130) and (will_5m <= -85)
 
-# New Trade Entry Lock
+# New Real Market Trade Entry
 if st.session_state.locked_trade is None:
     if early_short_cond:
         st.session_state.locked_trade = {
@@ -226,16 +248,17 @@ if st.session_state.locked_trade is None:
             f"📊 Confluence: 15m StochRSI {stoch_15m:.0f} Oversold Bounce."
         )
 
-# Active Position Tracking & Real-Time Alerts
+# Active Position Tracking & Real-Time Auto Exit Alerts
 if st.session_state.locked_trade is not None:
     t = st.session_state.locked_trade
-    pts = (live_price - t['entry']) if t['type'] == 'LONG' else (t['entry'] - live_price)
+    is_long = "LONG" in t['type']
+    pts = (live_price - t['entry']) if is_long else (t['entry'] - live_price)
     
-    hit_sl = (live_price <= t['sl']) if t['type'] == 'LONG' else (live_price >= t['sl'])
-    hit_tp1 = (live_price >= t['tp1']) if t['type'] == 'LONG' else (live_price <= t['tp1'])
-    hit_tp2 = (live_price >= t['tp2']) if t['type'] == 'LONG' else (live_price <= t['tp2'])
+    hit_sl = (live_price <= t['sl']) if is_long else (live_price >= t['sl'])
+    hit_tp1 = (live_price >= t['tp1']) if is_long else (live_price <= t['tp1'])
+    hit_tp2 = (live_price >= t['tp2']) if is_long else (live_price <= t['tp2'])
 
-    # Target 1 Alert Push
+    # Target 1 Auto Alert
     if hit_tp1 and not st.session_state.tp1_hit:
         st.session_state.tp1_hit = True
         send_telegram(
@@ -246,7 +269,7 @@ if st.session_state.locked_trade is not None:
             f"• *Action:* Stop-Loss ko entry (`${t['entry']:,.1f}`) par move karein (Risk-Free)."
         )
 
-    # Stop Loss Exit Alert
+    # Stop Loss Exit Auto Alert
     if hit_sl:
         st.error(f"🔴 STOP-LOSS HIT in {t['type']} (-{abs(pts):.0f} pts). Exited @ ${live_price:,.1f}.")
         send_telegram(
@@ -255,7 +278,7 @@ if st.session_state.locked_trade is not None:
             f"• *Entry:* `${t['entry']:,.1f}`\n"
             f"• *Exit:* `${live_price:,.1f}`\n"
             f"• *PnL:* -{abs(pts):.0f} Points\n"
-            f"• *Trade Rating:* ⭐ 1/5 (Risk Preserved)\n"
+            f"• *Trade Rating:* ⭐ 1/5 (Risk Preserved at SL)\n"
             f"• *Status:* Position closed. Scanning next opportunity."
         )
         st.session_state.trade_history.insert(0, {
@@ -270,7 +293,7 @@ if st.session_state.locked_trade is not None:
         st.session_state.locked_trade = None
         st.session_state.tp1_hit = False
 
-    # Target 2 Big Profit Exit Alert
+    # Target 2 Big Profit Exit Auto Alert
     elif hit_tp2:
         st.success(f"🟢 TARGET 2 HIT in {t['type']} (+{pts:.0f} pts PROFIT!). Position closed.")
         send_telegram(
@@ -295,7 +318,7 @@ if st.session_state.locked_trade is not None:
         st.session_state.tp1_hit = False
 
     else:
-        css_class = "trade-short" if t['type'] == 'SHORT' else "trade-long"
+        css_class = "trade-long" if is_long else "trade-short"
         tp1_status = "✅ HIT (SL at Entry)" if st.session_state.tp1_hit else "[+600 pts -> Shift SL]"
         st.markdown(f"""
         <div class="{css_class}">

@@ -1,27 +1,3 @@
-[05:21:20] Please replace `use_container_width` will be removed...
-[05:21:21] Please replace `use_container_width` will be removed...
-[05:21:26] Please replace `use_container_width` will be removed...
-[05:21:31] Please replace `use_container_width` will be removed...
-```[cite: 9]
-
-App crash nahi hui hai; **Streamlit continuous rerun loop mein atak chuki hai**[cite: 9]:
-1. Code ke aakhir mein laga `time.sleep(5)` + `st.rerun()` har 5 second mein poori script ko dobara shuru se chala raha hai[cite: 9].
-2. Har run par Binance se 7 timeframes ka heavy data download ho raha hai, jisme 6-7 second lag rahe hain.
-3. Rerun lagne se pehle agla load aa jata hai, jisse browser ka DOM freeze hokar sirf blue buffering spinner dikha raha hai[cite: 9].
-4. Streamlit ke latest version mein `use_container_width=True` deprecated hone ki wajah se warnings ki continuous flood aa rahi hai[cite: 9].
-
-Isko turant solve karne ke liye:
-* Auto-refresh ke liye CPU-blocking `time.sleep(5) + st.rerun()` ko hata kar **lightweight `st_autorefresh` pattern / cached container** lagaya gaya hai jo page ko hang nahi karega.
-* Deprecated parameters ko update kar diya gaya hai.
-* Binance data fetching ko background cache mein shift kiya gaya hai taaki UI 0.5 second mein render ho.
-
----
-
-### Replace Code: `btc_web_app.py`
-
-GitHub par **`btc_web_app.py`** ko open karke **Edit (Pencil)** dabayein aur poora code is exact version se replace karein:
-
-```python
 import streamlit as st
 import ccxt
 import pandas as pd
@@ -173,7 +149,6 @@ def cloud_daemon():
             live_p = float(ticker['last']) if (ticker and 'last' in ticker) else float(shared['last_price'])
             shared['last_price'] = live_p
 
-            # Fast 5m & 15m scanning
             d5 = fetch_tf_series(bg_ex, '5m')
             d15 = fetch_tf_series(bg_ex, '15m')
 
@@ -277,7 +252,6 @@ def cloud_daemon():
                             f"• TP2: `${live_p + 1500.0:,.1f}`"
                         )
 
-            # Update indicator matrix cache in background without blocking UI
             now = time.time()
             if now - shared['last_fetch'] > 15:
                 temp_map = {}
@@ -490,6 +464,6 @@ if user_query:
     with st.chat_message("assistant"):
         st.write(reply)
 
-# Clean, non-blocking refresh (UI responsive rehti hai aur buffer freeze nahi hoti)
+# Clean 3s refresh
 time.sleep(3)
 st.rerun()

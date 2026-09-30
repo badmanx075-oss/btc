@@ -51,7 +51,6 @@ def send_telegram(message):
         return False, str(e)
 
 # ================= 24/7 SHARED STATE & BACKGROUND ENGINE =================
-# Ye shared object cloud server ke RAM me permanently store rehta hai
 @st.cache_resource
 def get_shared_system():
     return {
@@ -90,6 +89,11 @@ def cloud_background_worker():
     while True:
         try:
             sym = 'BTC/USDT' if 'BTC/USDT' in exchange.markets else 'BTC/USD'
+            ticker = exchange.fetch_ticker(sym)
+            live_p = ticker['last'] if ticker and 'last' in ticker else shared['last_price']
+            shared['last_price'] = live_p
+            shared['last_ping'] = time.time()
+
             c5 = exchange.fetch_ohlcv(sym, timeframe='5m', limit=35)
             c15 = exchange.fetch_ohlcv(sym, timeframe='15m', limit=35)
 
@@ -102,12 +106,6 @@ def cloud_background_worker():
             cci15 = ta.trend.cci(df15['h'], df15['l'], df15['close'], window=20).iloc[-1]
             will5 = ta.momentum.williams_r(df5['h'], df5['l'], df5['close'], lbp=14).iloc[-1]
 
-            ticker = exchange.fetch_ticker(sym)
-            live_p = ticker['last'] if ticker and 'last' in ticker else df5.iloc[-1]['close']
-            shared['last_price'] = live_p
-            shared['last_ping'] = time.time()
-
-            # Active Trade Check
             t = shared['trade']
             if t is not None:
                 is_long = "LONG" in t['type']
@@ -117,7 +115,6 @@ def cloud_background_worker():
                 hit_tp1 = (live_p >= t['tp1']) if is_long else (live_p <= t['tp1'])
                 hit_tp2 = (live_p >= t['tp2']) if is_long else (live_p <= t['tp2'])
 
-                # TP1 Push Alert
                 if hit_tp1 and not shared['tp1_hit']:
                     shared['tp1_hit'] = True
                     send_telegram(
@@ -128,7 +125,6 @@ def cloud_background_worker():
                         f"• Action: Shift Stop-Loss to Entry (`${t['entry']:,.1f}`) [Zero Risk Active]."
                     )
 
-                # Stop-Loss Push Alert
                 if hit_sl:
                     send_telegram(
                         f"❌ *STOP-LOSS HIT IN THIS TRADE*\n\n"
@@ -151,7 +147,6 @@ def cloud_background_worker():
                     shared['trade'] = None
                     shared['tp1_hit'] = False
 
-                # Target 2 Push Alert
                 elif hit_tp2:
                     send_telegram(
                         f"💰 *PROFIT TARGET 2 HIT IN THIS TRADE!*\n\n"
@@ -174,7 +169,6 @@ def cloud_background_worker():
                     shared['trade'] = None
                     shared['tp1_hit'] = False
 
-            # Agar koi active trade nahi hai, to real signal check karein
             else:
                 early_short = (stoch5 >= 88 or stoch15 >= 90) and (cci5 > 130 or cci15 > 130) and (will5 >= -15)
                 early_long = (stoch5 <= 15 or stoch15 <= 18) and (cci5 < -130 or cci15 < -130) and (will5 <= -85)
@@ -217,15 +211,15 @@ def cloud_background_worker():
         except Exception:
             pass
 
-        time.sleep(4)
+        time.sleep(3)
 
-# 24/7 Background Thread Launch (Only Once)
+# 24/7 Background Thread Launch
 if not shared['thread_running']:
     bg_t = threading.Thread(target=cloud_background_worker, daemon=True)
     bg_t.start()
     shared['thread_running'] = True
 
-# ================= UI CALCULATION HELPERS =================
+# ================= UI HELPERS & LIVE PRICE FETCH =================
 def detect_candlestick_pattern(row, prev_row):
     o, h, l, c = row['open'], row['high'], row['low'], row['close']
     po, pc = prev_row['open'], prev_row['close']
@@ -283,13 +277,21 @@ def fetch_tf_data(tf):
     except Exception:
         return None
 
+# Har 5s UI iteration par direct exchange ticker se real-time tick fetch
+try:
+    sym = 'BTC/USDT' if 'BTC/USDT' in exchange.markets else 'BTC/USD'
+    ticker_ui = exchange.fetch_ticker(sym)
+    live_price = float(ticker_ui['last']) if (ticker_ui and 'last' in ticker_ui) else float(shared['last_price'])
+    shared['last_price'] = live_price
+except Exception:
+    live_price = float(shared['last_price'])
+
 tf_data = {}
 for tf in TIMEFRAMES:
     d = fetch_tf_data(tf)
     if d is not None:
         tf_data[tf] = d
 
-live_price = shared['last_price']
 df_5m = tf_data.get('5m')
 df_15m = tf_data.get('15m')
 recent_high = max(df_5m['high'].iloc[-20:].max() if df_5m is not None else live_price + 300, live_price + 150)
@@ -303,6 +305,7 @@ with st.sidebar:
     st.header("⚙️ 24/7 Cloud Daemon")
     st.success("🟢 Cloud Background Loop: ACTIVE")
     st.caption(f"Telegram Target ID: `{TELEGRAM_CHAT_ID}`")
+    st.caption(f"Last Price Sync: {datetime.now().strftime('%H:%M:%S')}")
 
     if st.button("🔔 Send Force Test Alert"):
         ok, reason = send_telegram("✅ *Terminal Test Message*\nAapka Telegram alert pipeline bilkul active hai!")
@@ -315,7 +318,6 @@ with st.sidebar:
     st.subheader("🧪 Live Auto-Trigger Tester")
     st.caption("Yeh dummy trade lock karega aur agle 8-15 points ke movement par TP1/TP2 ya SL ka notification auto bhejega.")
     
-    # Smart Dummy Trigger: Jo shared memory me lock hota hai aur fail nahi hota
     if st.button("🚀 Trigger Instant Dummy Trade"):
         shared['trade'] = {
             'type': 'LONG (TEST)',
@@ -429,7 +431,7 @@ for tf in TIMEFRAMES:
 if table_rows:
     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-# ----------------- CLOSED TRADES JOURNAL & STAR RATINGS -----------------
+# ----------------- CLOSED TRADES PERFORMANCE JOURNAL -----------------
 st.subheader("📜 Closed Trades Performance Journal")
 if shared['trade_history']:
     st.dataframe(pd.DataFrame(shared['trade_history']), use_container_width=True, hide_index=True)
